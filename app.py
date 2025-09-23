@@ -30,9 +30,10 @@ from websockets.asyncio.client import connect
 
 load_dotenv()
 
+os.environ["MODE"] = "UI"
 cur_dir = Path(__file__).parent
 
-API_KEY = os.environ['API_KEY']
+API_KEY = os.environ['API_KEY']  # Set with: export DASHSCOPE_API_KEY=xxx
 API_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-livetranslate-flash-realtime"
 VOICES = ["Cherry", "Nofish", "Jada", "Dylan", "Sunny", "Peter", "Kiki", "Eric"]
 
@@ -88,8 +89,8 @@ class LiveTranslateHandler(AsyncStreamHandler):
         try:
             await self.wait_for_args()
             args = self.latest_args
-            src_language_name = args[2] if len(args) > 2 else "Chinese" # 现在 dropdown 返回的是全称
-            target_language_name = args[3] if len(args) > 3 else "English" 
+            src_language_name = args[2] if len(args) > 2 else "English" # 现在 dropdown 返回的是全称
+            target_language_name = args[3] if len(args) > 3 else "Chinese" 
             src_language_code = LANG_MAP_REVERSE[src_language_name]
             target_language_code = LANG_MAP_REVERSE[target_language_name]
 
@@ -203,13 +204,13 @@ def update_chatbot(chatbot: list[dict], response: dict):
 chatbot = gr.Chatbot(type="messages")
 src_language = gr.Dropdown(
     choices=SRC_LANGUAGES,
-    value="Chinese",   # 改成全称
+    value="English",   # 改成全称
     type="value",
     label="Source Language"
 )
 language = gr.Dropdown(
     choices=TARGET_LANGUAGES,
-    value="English",   # 改成全称
+    value="Chinese",   # 改成全称
     type="value",
     label="Target Language"
 )
@@ -269,11 +270,11 @@ signal.signal(signal.SIGTERM, handle_exit)
 if __name__ == "__main__":
     import os
 
-    # if (mode := os.getenv("MODE")) == "UI":
-    stream.ui.launch(server_port=7860)
-    # elif mode == "PHONE":
-        #stream.fastphone(host="0.0.0.0", port=7860)
-    # else:
-    #    import uvicorn
+    if (mode := os.getenv("MODE")) == "UI":
+        stream.ui.launch(server_port=7860)
+    elif mode == "PHONE":
+        stream.fastphone(host="0.0.0.0", port=7860)
+    else:
+        import uvicorn
 
-    #    uvicorn.run(app, host="0.0.0.0", port=7860)
+        uvicorn.run(app, host="0.0.0.0", port=7860)
