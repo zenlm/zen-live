@@ -1,7 +1,9 @@
-fastapi>=0.68.0
-uvicorn>=0.15.0
-websockets>=10.0
-numpy>=1.21.0
-gradio>=4.0.0
-python-dotenv>=0.19.0
-fastrtc>=0.1.0
+fastapi
+uvicorn
+websockets>=14.0
+numpy
+python-dotenv
+fastrtc
+openai
+twilio
+python-dotenv
