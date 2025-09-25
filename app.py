@@ -34,7 +34,7 @@ os.environ["MODE"] = "UI"
 cur_dir = Path(__file__).parent
 
 API_KEY = os.environ['API_KEY']  # Set with: export DASHSCOPE_API_KEY=xxx
-API_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-livetranslate-flash-realtime"
+API_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?model=qwen3-livetranslate-flash-realtime"
 VOICES = ["Cherry", "Nofish", "Jada", "Dylan", "Sunny", "Peter", "Kiki", "Eric"]
 
 if not API_KEY:
