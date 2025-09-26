@@ -27,6 +27,10 @@ from fastrtc import (
 )
 from gradio.utils import get_space
 from websockets.asyncio.client import connect
+import ssl
+import certifi
+
+import cv2
 
 load_dotenv()
 
@@ -36,6 +40,9 @@ cur_dir = Path(__file__).parent
 API_KEY = os.environ['API_KEY']  # Set with: export DASHSCOPE_API_KEY=xxx
 API_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?model=qwen3-livetranslate-flash-realtime"
 VOICES = ["Cherry", "Nofish", "Jada", "Dylan", "Sunny", "Peter", "Kiki", "Eric"]
+
+ssl_context = ssl.create_default_context(cafile=certifi.where())
+# ssl_context = ssl._create_unverified_context()  # 禁用证书验证
 
 if not API_KEY:
     raise RuntimeError("Missing DASHSCOPE_API_KEY environment variable.")
@@ -77,6 +84,60 @@ class LiveTranslateHandler(AsyncStreamHandler):
         )
         self.connection = None
         self.output_queue = asyncio.Queue()
+        self.video_capture = None  # 视频捕获设备
+        self.last_capture_time = 0  # 上次视频帧捕获时间戳
+        self.enable_video = False  
+        self.output_queue = asyncio.Queue()
+        self.awaiting_new_message = True
+        self.stable_text = ""  # 黑色部分
+        self.temp_text = ""    # 灰色部分
+
+    def setup_video(self):
+        """设置视频捕获设备"""
+        self.video_capture = cv2.VideoCapture(0)  # 打开默认摄像头
+        self.video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)   # 设置宽度
+        self.video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)  # 设置高度
+        self.video_capture.set(cv2.CAP_PROP_FPS, 30)  # 设置 FPS
+
+    def get_video_frame(self) -> bytes | None:
+        """获取视频帧并处理成缩放后的字节"""
+        if not self.video_capture:
+            return None
+
+        # 获取当前时间
+        current_time = time.time()
+
+        # 每隔 0.5 秒截取一帧
+        if current_time - self.last_capture_time >= 0.5:
+            self.last_capture_time = current_time
+            ret, frame = self.video_capture.read()  # 捕获当前帧
+            if ret:
+                # 压缩并调整分辨率
+                resized_frame = cv2.resize(frame, (640, 360))  # 确保分辨率低于 480p
+                # 使用 JPEG 格式编码视频帧
+                _, encoded_image = cv2.imencode('.jpg', resized_frame)
+                return encoded_image.tobytes()
+        return None
+
+    async def send_image_frame(self, image_bytes: bytes, *, event_id: str | None = None):
+        """将图像数据发送给服务器"""
+        if not self.connection:
+            return
+
+        if not image_bytes:
+            raise ValueError("image_bytes 不能为空")
+
+        # 编码为 Base64
+        image_b64 = base64.b64encode(image_bytes).decode()
+
+        event = {
+            "event_id": event_id or self.msg_id(),
+            "type": "input_image_buffer.append",
+            "image": image_b64,
+        }
+
+        await self.connection.send(json.dumps(event))
+
 
     def copy(self):
         return LiveTranslateHandler()
@@ -89,19 +150,22 @@ class LiveTranslateHandler(AsyncStreamHandler):
         try:
             await self.wait_for_args()
             args = self.latest_args
-            src_language_name = args[2] if len(args) > 2 else "English" # 现在 dropdown 返回的是全称
-            target_language_name = args[3] if len(args) > 3 else "Chinese" 
+            src_language_name = args[2] if len(args) > 2 else "Chinese" # 现在 dropdown 返回的是全称
+            target_language_name = args[3] if  len(args) > 3 else "English" 
             src_language_code = LANG_MAP_REVERSE[src_language_name]
             target_language_code = LANG_MAP_REVERSE[target_language_name]
 
-            # src_language = args[2] if len(args) > 2 else "zh"  # 新增源语言参数
-            # target_language = args[3] if len(args) > 3 else "en" 
             voice_id = args[4] if len(args) > 4 else "Cherry"
+
+            self.enable_video = True if args[5] == "True" else False
+
+            if self.enable_video:
+                self.setup_video()  # 初始化视频设备
             
             if src_language_code == target_language_code:
                 print(f"⚠️ 源语言和目标语言相同({target_language_name})，将以复述模式运行")
 
-            async with connect(API_URL, additional_headers=headers) as conn:
+            async with connect(API_URL, additional_headers=headers, ssl=ssl_context) as conn:
                 self.client = conn
                 await conn.send(
                     json.dumps(
@@ -123,36 +187,89 @@ class LiveTranslateHandler(AsyncStreamHandler):
                 )
                 self.connection = conn
 
+                # WebSocket 收到的每一个响应（data）是一个 JSON 事件，表示翻译任务的进展。
                 async for data in self.connection:
                     event = json.loads(data)
                     if "type" not in event:
                         continue
                     event_type = event["type"]
 
-                    if event_type == "response.audio_transcript.delta":
-                        # 增量字幕
-                        text = event.get("transcript", "")
-                        if text:
-                            await self.output_queue.put(
-                                AdditionalOutputs({"role": "assistant", "content": text})
-                            )
+                    # if event_type == "response.audio_transcript.delta":
+                    #     # 增量字幕
+                    #     text = event.get("transcript", "")
+                    #     if text:
+                    #         await self.output_queue.put(
+                    #             AdditionalOutputs({"role": "assistant", "content": text, "update": True, "new_message": self.awaiting_new_message
+                    #             })
+                    #         )
+                    #         self.awaiting_new_message = False
 
-                    # elif event_type in ("response.text.text", "response.audio_transcript.text"):
+                    # # 中间文本内容
+                    # if event_type in ("response.text.text", "response.audio_transcript.text"):
                     #     # 中间结果 + stash（stash通常是句子完整缓存）
                     #     stash_text = event.get("stash", "")
                     #     text_field = event.get("text", "")
                     #     if stash_text or text_field:
                     #         await self.output_queue.put(
-                    #             AdditionalOutputs({"role": "assistant", "content": stash_text or text_field})
+                    #             AdditionalOutputs({"role": "assistant", "content": stash_text or text_field, "update": True, "new_message": self.awaiting_new_message})
                     #         )
+                    #         self.awaiting_new_message = False
+
+                    # elif event_type == "response.audio_transcript.done":
+                    #     # 最终完整句子
+                    #     transcript = event.get("transcript", "")
+                    #     if transcript:
+                    #         await self.output_queue.put(
+                    #             AdditionalOutputs({"role": "assistant", "content": transcript, "update": True, "new_message": self.awaiting_new_message})
+                    #         )
+                    #         self.awaiting_new_message = True
+
+                    if event_type == "response.audio_transcript.delta":
+                        self.temp_text = event.get("transcript", "")
+                        if self.temp_text:
+                            await self.output_queue.put(
+                                AdditionalOutputs({
+                                    "role": "assistant",
+                                    "content": (self.stable_text, self.temp_text),
+                                    "update": True,
+                                    "new_message": self.awaiting_new_message
+                                })
+                            )
+                            self.awaiting_new_message = False
+
+                    elif event_type in ("response.text.text", "response.audio_transcript.text"):
+                        # 更新稳定部分（stash / text 认为是已确认的）
+                        new_stable = event.get("stash") or event.get("text") or ""
+                        if new_stable:
+                            self.stable_text = f"{self.stable_text}{new_stable}"
+                            self.temp_text = ""  # 临时部分清空
+                            await self.output_queue.put(
+                                AdditionalOutputs({
+                                    "role": "assistant",
+                                    "content": (self.stable_text, self.temp_text),
+                                    "update": True,
+                                    "new_message": self.awaiting_new_message
+                                })
+                            )
+                            self.awaiting_new_message = False
 
                     elif event_type == "response.audio_transcript.done":
-                        # 最终完整句子
                         transcript = event.get("transcript", "")
                         if transcript:
+                            self.stable_text = transcript
+                            self.temp_text = ""
                             await self.output_queue.put(
-                                AdditionalOutputs({"role": "assistant", "content": transcript})
+                                AdditionalOutputs({
+                                    "role": "assistant",
+                                    "content": (self.stable_text, self.temp_text),
+                                    "update": True,
+                                    "new_message": self.awaiting_new_message
+                                })
                             )
+                        # 开启新气泡
+                        self.awaiting_new_message = True
+                        self.stable_text = ""
+                        self.temp_text = ""
 
                     elif event_type == "response.audio.delta":
                         audio_b64 = event.get("delta", "")
@@ -183,10 +300,22 @@ class LiveTranslateHandler(AsyncStreamHandler):
             )
         )
 
+        # 视频部分
+        if self.enable_video:
+            image_frame = self.get_video_frame()
+            if image_frame:
+                await self.send_image_frame(image_frame)
+
+
     async def emit(self) -> tuple[int, np.ndarray] | AdditionalOutputs | None:
         return await wait_for_item(self.output_queue)
 
     async def shutdown(self) -> None:
+        """关闭连接并清理资源"""
+        if self.video_capture:
+            self.video_capture.release()  # 释放视频设备
+            self.video_capture = None
+
         if self.connection:
             await self.connection.close()
             self.connection = None
@@ -197,7 +326,32 @@ class LiveTranslateHandler(AsyncStreamHandler):
 
 
 def update_chatbot(chatbot: list[dict], response: dict):
-    chatbot.append(response)
+    is_update = response.pop("update", False)
+    new_message_flag = response.pop("new_message", False)
+    content_tuple = response["content"]
+
+    # 组 HTML：黑色稳定文本 + 灰色临时文本
+    stable_html = f"<span style='color:black'>{content_tuple[0]}</span>"
+    temp_html   = f"<span style='color:gray'>{content_tuple[1]}</span>"
+    html_content = stable_html + temp_html
+
+    if is_update:
+        if new_message_flag or not chatbot:
+            chatbot.append({
+                "role": "assistant",
+                "content": html_content
+            })
+        else:
+            if chatbot[-1]["role"] == "assistant":
+                chatbot[-1]["content"] = html_content
+            else:
+                chatbot.append({
+                    "role": "assistant",
+                    "content": html_content
+                })
+    else:
+        chatbot.append(response)
+
     return chatbot
 
 
@@ -215,23 +369,31 @@ language = gr.Dropdown(
     label="Target Language"
 )
 voice = gr.Dropdown(choices=VOICES, value=VOICES[0], type="value", label="Voice")
+video_flag = gr.Dropdown(
+    choices=["True", "False"],
+    value="False",
+    label="Use Video"
+)
+
 latest_message = gr.Textbox(type="text", visible=False)
 
 # 可选：暂时禁用 TURN 配置进行测试
 rtc_config = get_cloudflare_turn_credentials_async if get_space() else None
 # rtc_config = None  # 取消注释可禁用 TURN 测试
 
+
 stream = Stream(
     LiveTranslateHandler(),
     mode="send-receive",
     modality="audio",
-    additional_inputs=[src_language, language, voice, chatbot],  # 添加 src_language
+    additional_inputs=[src_language, language, voice, video_flag, chatbot],
     additional_outputs=[chatbot],
     additional_outputs_handler=update_chatbot,
     rtc_configuration=rtc_config,
     concurrency_limit=5 if get_space() else None,
     time_limit=90 if get_space() else None,
 )
+
 
 
 app = FastAPI()
@@ -271,10 +433,10 @@ if __name__ == "__main__":
     import os
 
     if (mode := os.getenv("MODE")) == "UI":
-        stream.ui.launch(server_port=7860)
+        stream.ui.launch(server_port=7862)
     elif mode == "PHONE":
-        stream.fastphone(host="0.0.0.0", port=7860)
+        stream.fastphone(host="0.0.0.0", port=7862)
     else:
         import uvicorn
 
-        uvicorn.run(app, host="0.0.0.0", port=7860)
+        uvicorn.run(app, host="0.0.0.0", port=7862)
