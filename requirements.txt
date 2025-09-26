@@ -7,3 +7,4 @@ fastrtc
 openai
 twilio
 python-dotenv
+cv2
