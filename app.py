@@ -87,10 +87,6 @@ class LiveTranslateHandler(AsyncStreamHandler):
         self.video_capture = None  # 视频捕获设备
         self.last_capture_time = 0  # 上次视频帧捕获时间戳
         self.enable_video = False  
-        self.output_queue = asyncio.Queue()
-        self.awaiting_new_message = True
-        self.stable_text = ""  # 黑色部分
-        self.temp_text = ""    # 灰色部分
 
     def setup_video(self):
         """设置视频捕获设备"""
@@ -194,82 +190,21 @@ class LiveTranslateHandler(AsyncStreamHandler):
                         continue
                     event_type = event["type"]
 
-                    # if event_type == "response.audio_transcript.delta":
-                    #     # 增量字幕
-                    #     text = event.get("transcript", "")
-                    #     if text:
-                    #         await self.output_queue.put(
-                    #             AdditionalOutputs({"role": "assistant", "content": text, "update": True, "new_message": self.awaiting_new_message
-                    #             })
-                    #         )
-                    #         self.awaiting_new_message = False
-
-                    # # 中间文本内容
-                    # if event_type in ("response.text.text", "response.audio_transcript.text"):
-                    #     # 中间结果 + stash（stash通常是句子完整缓存）
-                    #     stash_text = event.get("stash", "")
-                    #     text_field = event.get("text", "")
-                    #     if stash_text or text_field:
-                    #         await self.output_queue.put(
-                    #             AdditionalOutputs({"role": "assistant", "content": stash_text or text_field, "update": True, "new_message": self.awaiting_new_message})
-                    #         )
-                    #         self.awaiting_new_message = False
-
-                    # elif event_type == "response.audio_transcript.done":
-                    #     # 最终完整句子
-                    #     transcript = event.get("transcript", "")
-                    #     if transcript:
-                    #         await self.output_queue.put(
-                    #             AdditionalOutputs({"role": "assistant", "content": transcript, "update": True, "new_message": self.awaiting_new_message})
-                    #         )
-                    #         self.awaiting_new_message = True
-
                     if event_type == "response.audio_transcript.delta":
-                        self.temp_text = event.get("transcript", "")
-                        if self.temp_text:
+                        # 增量字幕
+                        text = event.get("transcript", "")
+                        if text:
                             await self.output_queue.put(
-                                AdditionalOutputs({
-                                    "role": "assistant",
-                                    "content": (self.stable_text, self.temp_text),
-                                    "update": True,
-                                    "new_message": self.awaiting_new_message
-                                })
+                                AdditionalOutputs({"role": "assistant", "content": text})
                             )
-                            self.awaiting_new_message = False
-
-                    elif event_type in ("response.text.text", "response.audio_transcript.text"):
-                        # 更新稳定部分（stash / text 认为是已确认的）
-                        new_stable = event.get("stash") or event.get("text") or ""
-                        if new_stable:
-                            self.stable_text = f"{self.stable_text}{new_stable}"
-                            self.temp_text = ""  # 临时部分清空
-                            await self.output_queue.put(
-                                AdditionalOutputs({
-                                    "role": "assistant",
-                                    "content": (self.stable_text, self.temp_text),
-                                    "update": True,
-                                    "new_message": self.awaiting_new_message
-                                })
-                            )
-                            self.awaiting_new_message = False
 
                     elif event_type == "response.audio_transcript.done":
+                        # 最终完整句子
                         transcript = event.get("transcript", "")
                         if transcript:
-                            self.stable_text = transcript
-                            self.temp_text = ""
                             await self.output_queue.put(
-                                AdditionalOutputs({
-                                    "role": "assistant",
-                                    "content": (self.stable_text, self.temp_text),
-                                    "update": True,
-                                    "new_message": self.awaiting_new_message
-                                })
+                                AdditionalOutputs({"role": "assistant", "content": transcript})
                             )
-                        # 开启新气泡
-                        self.awaiting_new_message = True
-                        self.stable_text = ""
-                        self.temp_text = ""
 
                     elif event_type == "response.audio.delta":
                         audio_b64 = event.get("delta", "")
@@ -326,32 +261,7 @@ class LiveTranslateHandler(AsyncStreamHandler):
 
 
 def update_chatbot(chatbot: list[dict], response: dict):
-    is_update = response.pop("update", False)
-    new_message_flag = response.pop("new_message", False)
-    content_tuple = response["content"]
-
-    # 组 HTML：黑色稳定文本 + 灰色临时文本
-    stable_html = f"<span style='color:black'>{content_tuple[0]}</span>"
-    temp_html   = f"<span style='color:gray'>{content_tuple[1]}</span>"
-    html_content = stable_html + temp_html
-
-    if is_update:
-        if new_message_flag or not chatbot:
-            chatbot.append({
-                "role": "assistant",
-                "content": html_content
-            })
-        else:
-            if chatbot[-1]["role"] == "assistant":
-                chatbot[-1]["content"] = html_content
-            else:
-                chatbot.append({
-                    "role": "assistant",
-                    "content": html_content
-                })
-    else:
-        chatbot.append(response)
-
+    chatbot.append(response)
     return chatbot
 
 
@@ -386,7 +296,7 @@ stream = Stream(
     LiveTranslateHandler(),
     mode="send-receive",
     modality="audio",
-    additional_inputs=[src_language, language, voice, video_flag, chatbot],
+    additional_inputs=[src_language, language, voice, video_flag,chatbot],
     additional_outputs=[chatbot],
     additional_outputs_handler=update_chatbot,
     rtc_configuration=rtc_config,
@@ -439,4 +349,4 @@ if __name__ == "__main__":
     else:
         import uvicorn
 
-        uvicorn.run(app, host="0.0.0.0", port=7862)
+        uvicorn.run(app, host="0.0.0.0", port=7860)
