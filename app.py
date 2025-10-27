@@ -75,7 +75,7 @@ SRC_LANGUAGES = [LANG_MAP[code] for code in ["en", "zh", "ru", "fr", "de", "pt",
 TARGET_LANGUAGES = [LANG_MAP[code] for code in ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar"]]
 
 
-class LiveTranslateHandler(AsyncStreamHandler):
+class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
     def __init__(self) -> None:
         super().__init__(
             expected_layout="mono",
@@ -84,55 +84,15 @@ class LiveTranslateHandler(AsyncStreamHandler):
         )
         self.connection = None
         self.output_queue = asyncio.Queue()
-        self.video_capture = None  # 视频捕获设备
-        self.last_capture_time = 0  # 上次视频帧捕获时间戳
-        self.enable_video = False  
+        self.video_queue = asyncio.Queue()
 
-    def setup_video(self):
-        """设置视频捕获设备"""
-        self.video_capture = cv2.VideoCapture(0)  # 打开默认摄像头
-        self.video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)   # 设置宽度
-        self.video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)  # 设置高度
-        self.video_capture.set(cv2.CAP_PROP_FPS, 30)  # 设置 FPS
+        self.last_send_time = 0.0     # 上次发送时间
+        self.video_interval = 0.5     # 间隔 0.5 s
+        self.latest_frame = None
 
-    def get_video_frame(self) -> bytes | None:
-        """获取视频帧并处理成缩放后的字节"""
-        if not self.video_capture:
-            return None
-
-        # 获取当前时间
-        current_time = time.time()
-
-        # 每隔 0.5 秒截取一帧
-        if current_time - self.last_capture_time >= 0.5:
-            self.last_capture_time = current_time
-            ret, frame = self.video_capture.read()  # 捕获当前帧
-            if ret:
-                # 压缩并调整分辨率
-                resized_frame = cv2.resize(frame, (640, 360))  # 确保分辨率低于 480p
-                # 使用 JPEG 格式编码视频帧
-                _, encoded_image = cv2.imencode('.jpg', resized_frame)
-                return encoded_image.tobytes()
-        return None
-
-    async def send_image_frame(self, image_bytes: bytes, *, event_id: str | None = None):
-        """将图像数据发送给服务器"""
-        if not self.connection:
-            return
-
-        if not image_bytes:
-            raise ValueError("image_bytes 不能为空")
-
-        # 编码为 Base64
-        image_b64 = base64.b64encode(image_bytes).decode()
-
-        event = {
-            "event_id": event_id or self.msg_id(),
-            "type": "input_image_buffer.append",
-            "image": image_b64,
-        }
-
-        await self.connection.send(json.dumps(event))
+        self.awaiting_new_message = True
+        self.stable_text = ""  # 黑色部分
+        self.temp_text = ""    # 灰色部分
 
 
     def copy(self):
@@ -152,11 +112,6 @@ class LiveTranslateHandler(AsyncStreamHandler):
             target_language_code = LANG_MAP_REVERSE[target_language_name]
 
             voice_id = args[4] if len(args) > 4 else "Cherry"
-
-            self.enable_video = True if args[5] == "True" else False
-
-            if self.enable_video:
-                self.setup_video()  # 初始化视频设备
             
             if src_language_code == target_language_code:
                 print(f"⚠️ 源语言和目标语言相同({target_language_name})，将以复述模式运行")
@@ -190,21 +145,45 @@ class LiveTranslateHandler(AsyncStreamHandler):
                         continue
                     event_type = event["type"]
 
-                    if event_type == "response.audio_transcript.delta":
-                        # 增量字幕
-                        text = event.get("transcript", "")
-                        if text:
-                            await self.output_queue.put(
-                                AdditionalOutputs({"role": "assistant", "content": text})
-                            )
+                    if event_type in ("response.text.text", "response.audio_transcript.text"):
+                        # 更新稳定部分（stash / text 认为是已确认的）
+                        self.stable_text = event.get("text", "") or ""
+                        self.temp_text = event.get("stash", "") or ""
+                        # self.stable_text = event.get("stash", "") or ""
+                        # self.temp_text = event.get("text", "") or ""
+
+                        print(f"[STABLE] {self.stable_text}")
+                        print(f"[TEMP] {self.temp_text}")
+                        await self.output_queue.put(
+                            AdditionalOutputs({
+                                "role": "assistant",
+                                # 将稳定文本变黑色、临时文本变灰色
+                                "content": f"<span style='color:black'>{self.stable_text}</span>"
+                                        f"<span style='color:gray'>{self.temp_text}</span>",
+                                "update": True,
+                                "new_message": self.awaiting_new_message
+                            })
+                        )
+                        self.awaiting_new_message = False
 
                     elif event_type == "response.audio_transcript.done":
-                        # 最终完整句子
                         transcript = event.get("transcript", "")
+                        print(f"[DONE] {transcript}")
                         if transcript:
+                            self.stable_text = transcript
+                            self.temp_text = ""
                             await self.output_queue.put(
-                                AdditionalOutputs({"role": "assistant", "content": transcript})
+                                AdditionalOutputs({
+                                    "role": "assistant",
+                                    "content": f"<span style='color:black'>{self.stable_text}</span>",
+                                    "update": True,
+                                    "new_message": self.awaiting_new_message
+                                })
                             )
+                        # 开启新气泡
+                        self.awaiting_new_message = True
+                        self.stable_text = ""
+                        self.temp_text = ""
 
                     elif event_type == "response.audio.delta":
                         audio_b64 = event.get("delta", "")
@@ -214,32 +193,70 @@ class LiveTranslateHandler(AsyncStreamHandler):
                             await self.output_queue.put(
                                 (self.output_sample_rate, audio_array)
                             )
+              
 
         except Exception as e:
             print(f"Connection error: {e}")
             await self.shutdown()
 
-    async def receive(self, frame: tuple[int, np.ndarray]) -> None:
-        if not self.connection:
+    # 客户端 to 服务端
+    async def video_receive(self, frame: np.ndarray):
+        self.latest_frame = frame
+        if self.connection is None:
             return
-        _, array = frame
+
+        # Push frame to local queue for display immediately
+        await self.video_queue.put(frame)  
+
+        now = time.time()
+        if now - self.last_send_time < self.video_interval:
+            return
+        self.last_send_time = now
+
+        # 发送到云端
+        frame_resized = cv2.resize(frame, (640, 360))
+        _, buf = cv2.imencode(".jpg", frame_resized, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        img_b64 = base64.b64encode(buf.tobytes()).decode()
+
+        await self.connection.send(
+            json.dumps(
+                {
+                    "event_id": self.msg_id(),
+                    "type": "input_image_buffer.append",
+                    "image": img_b64,
+                }
+            )
+        )
+
+    # 服务端 2 客户端
+    async def video_emit(self):
+        # frame = await wait_for_item(self.video_queue, 0.01)
+        # # print(f"能够显示出来的=================={frame.dtype}==================")
+        # if frame is not None:
+        #     return frame
+        # else:
+        #     # return np.zeros((100, 100, 3), dtype=np.uint8)
+        #     return None
+        if self.latest_frame is not None:
+            return self.latest_frame
+        return np.zeros((100, 100, 3), dtype=np.uint8)
+
+
+    async def receive(self, frame):
+        if self.connection is None:
+            return
+        sr, array = frame          # frame 一定是 (sr, np.ndarray)
         array = array.squeeze()
-        audio_message = base64.b64encode(array.tobytes()).decode("utf-8")
+        audio_b64 = base64.b64encode(array.tobytes()).decode()
         await self.connection.send(
             json.dumps(
                 {
                     "event_id": self.msg_id(),
                     "type": "input_audio_buffer.append",
-                    "audio": audio_message,
+                    "audio": audio_b64,
                 }
             )
         )
-
-        # 视频部分
-        if self.enable_video:
-            image_frame = self.get_video_frame()
-            if image_frame:
-                await self.send_image_frame(image_frame)
 
 
     async def emit(self) -> tuple[int, np.ndarray] | AdditionalOutputs | None:
@@ -247,9 +264,9 @@ class LiveTranslateHandler(AsyncStreamHandler):
 
     async def shutdown(self) -> None:
         """关闭连接并清理资源"""
-        if self.video_capture:
-            self.video_capture.release()  # 释放视频设备
-            self.video_capture = None
+        # if self.video_capture:
+        #     self.video_capture.release()  # 释放视频设备
+        #     self.video_capture = None
 
         if self.connection:
             await self.connection.close()
@@ -261,8 +278,23 @@ class LiveTranslateHandler(AsyncStreamHandler):
 
 
 def update_chatbot(chatbot: list[dict], response: dict):
-    chatbot.append(response)
+    is_update = response.pop("update", False)
+    new_message_flag = response.pop("new_message", False)
+    stable_html = response["content"]
+
+    if is_update:
+        if new_message_flag or not chatbot:
+            chatbot.append({"role": "assistant", "content": stable_html})
+        else:
+            if chatbot[-1]["role"] == "assistant":
+                chatbot[-1]["content"] = stable_html
+            else:
+                chatbot.append({"role": "assistant", "content": stable_html})
+    else:
+        chatbot.append(response)
+
     return chatbot
+
 
 
 chatbot = gr.Chatbot(type="messages")
@@ -279,11 +311,11 @@ language = gr.Dropdown(
     label="Target Language"
 )
 voice = gr.Dropdown(choices=VOICES, value=VOICES[0], type="value", label="Voice")
-video_flag = gr.Dropdown(
-    choices=["True", "False"],
-    value="False",
-    label="Use Video"
-)
+# video_flag = gr.Dropdown(
+#     choices=["True", "False"],
+#     value="False",
+#     label="Use Video"
+# )
 
 latest_message = gr.Textbox(type="text", visible=False)
 
@@ -295,8 +327,9 @@ rtc_config = get_cloudflare_turn_credentials_async if get_space() else None
 stream = Stream(
     LiveTranslateHandler(),
     mode="send-receive",
-    modality="audio",
-    additional_inputs=[src_language, language, voice, video_flag,chatbot],
+    modality="audio-video",
+    # modality="audio",
+    additional_inputs=[src_language, language, voice, chatbot],
     additional_outputs=[chatbot],
     additional_outputs_handler=update_chatbot,
     rtc_configuration=rtc_config,
@@ -304,7 +337,62 @@ stream = Stream(
     time_limit=90 if get_space() else None,
 )
 
+#  前端
+def enhance_ui():
+    with stream.ui as demo:
+        gr.HTML("""
+    <style>
+        .gradio-container .wrap {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+          }
+        .gradio-container video{
+            width: 100%;
+            max-width: 500px;
+            max-height: 500px;
+            aspect-ratio: 1/1;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            margin: 7% 10px;
+        }
 
+        .button-wrap.svelte-g69fcx.svelte-g69fcx {
+            position: absolute;
+            background-color: color-mix(in srgb,var(--block-background-fill) 50%,transparent);
+            border: 1px solid var(--border-color-primary);
+            padding: var(--size-1-5);
+            display: flex;
+            bottom: 300px;
+            left: 50%;
+            transform: translate(-50%);
+            box-shadow: var(--shadow-drop-lg);
+            border-radius: var(--radius-xl);
+            line-height: var(--size-3);
+            color: var(--button-secondary-text-color)
+        }
+        label.svelte-j0zqjt.svelte-j0zqjt {
+            display: flex;
+            align-items: center;
+            z-index: var(--layer-2);
+            box-shadow: var(--block-label-shadow);
+            border: var(--block-label-border-width) solid var(--block-label-border-color);
+            border-top: none;
+            border-left: none;
+            border-radius: var(--block-label-radius);
+            background: var(--block-label-background-fill);
+            padding: var(--block-label-padding);
+            pointer-events: none;
+            color: var(--block-label-text-color);
+            font-weight: var(--block-label-text-weight);
+            font-size: var(--block-label-text-size);
+            line-height: var(--line-sm)
+        }
+    </style>
+        """)
+    return demo
 
 app = FastAPI()
 
@@ -333,6 +421,7 @@ def _(webrtc_id: str):
 
 def handle_exit(sig, frame):
     print("Shutting down gracefully...")
+    exit(0)
     # 可扩展为执行更多清理逻辑
 
 
@@ -343,10 +432,12 @@ if __name__ == "__main__":
     import os
 
     if (mode := os.getenv("MODE")) == "UI":
-        stream.ui.launch(server_port=7860)
+        demo = enhance_ui()
+        demo.launch()
+        # stream.ui.launch(server_port=7862)
     elif mode == "PHONE":
-        stream.fastphone(host="0.0.0.0", port=7860)
+        stream.fastphone(host="0.0.0.0")
     else:
         import uvicorn
 
-        uvicorn.run(app, host="0.0.0.0", port=7860)
+        uvicorn.run(app, host="0.0.0.0")
