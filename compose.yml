@@ -1,0 +1,41 @@
+services:
+  zen-live:
+    build: .
+    image: zenlm/zen-live:latest
+    container_name: zen-live
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      # Backend configuration (choose one)
+      - API_KEY=${API_KEY:-}
+      - HANZO_NODE_URL=${HANZO_NODE_URL:-}
+      - ZEN_OMNI_PATH=${ZEN_OMNI_PATH:-}
+      # Authentication (optional - set both to enable)
+      - ZEN_LIVE_USER=${ZEN_LIVE_USER:-}
+      - ZEN_LIVE_PASS=${ZEN_LIVE_PASS:-}
+      # Input configuration
+      - WHIP_ENABLED=${WHIP_ENABLED:-true}
+      - SRT_INPUT_URL=${SRT_INPUT_URL:-}
+      - RTMP_INPUT_URL=${RTMP_INPUT_URL:-}
+      # Server config
+      - PORT=8000
+      - MODE=${MODE:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.zen-live.rule=Host(`zen-live.hanzo.ai`)"
+      - "traefik.http.routers.zen-live.entrypoints=websecure"
+      - "traefik.http.routers.zen-live.tls.certresolver=letsencrypt"
+      - "traefik.http.services.zen-live.loadbalancer.server.port=8000"
+    networks:
+      - hanzo
+
+networks:
+  hanzo:
+    external: true
