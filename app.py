@@ -569,17 +569,17 @@ class WebRTCOffer(BaseModel):
 active_sessions = {}
 
 
-@app.post("/webrtc/offer")
+@app.post("/api/webrtc/offer")
 async def webrtc_offer(offer: WebRTCOffer):
     """Handle WebRTC offer from control room portal.
-    
+
     This endpoint receives SDP offers and returns SDP answers
     for establishing low-latency WebRTC connections.
     """
     try:
         # Generate session ID
         session_id = secrets.token_hex(16)
-        
+
         # Store session config
         active_sessions[session_id] = {
             "src_language": offer.src_language,
@@ -587,27 +587,38 @@ async def webrtc_offer(offer: WebRTCOffer):
             "voice": offer.voice,
             "created_at": time.time()
         }
-        
+
         # Use FastRTC's internal offer handling
         response = await stream.offer(
             offer.sdp,
-            offer.type,
-            extra_data={
-                "src_language": offer.src_language,
-                "target_language": offer.target_language,
-                "voice": offer.voice
-            }
+            offer.type
         )
-        
+
+        # Handle response - ensure required fields are present
+        if isinstance(response, dict):
+            sdp = response.get("sdp", "")
+            resp_type = response.get("type", "answer")
+            webrtc_id = response.get("webrtc_id", session_id)
+        else:
+            # If response is RTCSessionDescription or similar object
+            sdp = getattr(response, "sdp", str(response))
+            resp_type = getattr(response, "type", "answer")
+            webrtc_id = session_id
+
+        if not sdp:
+            raise ValueError("No SDP in response")
+
         return JSONResponse({
-            "sdp": response["sdp"],
-            "type": response["type"],
-            "webrtc_id": response.get("webrtc_id", session_id)
+            "sdp": sdp,
+            "type": resp_type,
+            "webrtc_id": webrtc_id
         })
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"WebRTC offer error: {e}")
         return JSONResponse(
-            {"error": str(e)},
+            {"error": str(e), "type": "error"},
             status_code=500
         )
 

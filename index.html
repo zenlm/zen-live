@@ -228,31 +228,48 @@
         }
 
         .btn-primary {
-            background: var(--highlight);
-            color: white;
+            background: var(--text);
+            color: var(--bg-dark);
+            border: 2px solid var(--text);
         }
 
         .btn-primary:hover {
-            background: #ff5a75;
+            background: transparent;
+            color: var(--text);
         }
 
         .btn-primary:disabled {
             background: var(--text-muted);
+            border-color: var(--text-muted);
+            color: var(--bg-panel);
             cursor: not-allowed;
         }
 
         .btn-secondary {
             background: var(--accent);
             color: var(--text);
+            border: 2px solid var(--accent);
         }
 
         .btn-secondary:hover {
-            background: #1a4080;
+            background: var(--text-muted);
         }
 
         .btn-stop {
-            background: #dc3545;
-            color: white;
+            background: transparent;
+            color: var(--text);
+            border: 2px solid var(--text);
+        }
+
+        .btn-stop:hover {
+            background: var(--text);
+            color: var(--bg-dark);
+        }
+
+        .btn-stop:disabled {
+            border-color: var(--text-muted);
+            color: var(--text-muted);
+            cursor: not-allowed;
         }
 
         .transcript-section {
@@ -828,7 +845,7 @@
             const targetLang = document.getElementById('targetLanguage').value;
             const voice = document.getElementById('voiceSelect').value;
 
-            const response = await fetch('/webrtc/offer', {
+            const response = await fetch('/api/webrtc/offer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -841,6 +858,17 @@
             });
 
             const data = await response.json();
+
+            // Check for error
+            if (data.error) {
+                throw new Error(data.error);
+            }
+
+            // Validate response has required fields
+            if (!data.sdp || !data.type) {
+                throw new Error('Invalid server response: missing sdp or type');
+            }
+
             webrtcId = data.webrtc_id;
 
             // Set remote description
