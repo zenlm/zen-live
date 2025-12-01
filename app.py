@@ -34,11 +34,12 @@ from pathlib import Path
 import gradio as gr
 import numpy as np
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Depends, HTTPException, status
+from fastapi import FastAPI, Request, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional, List, Literal
 from fastrtc import (
     AdditionalOutputs,
     # AsyncStreamHandler,
@@ -988,6 +989,263 @@ def _(webrtc_id: str):
             yield f"event: output\ndata: {s}\n\n"
 
     return StreamingResponse(output_stream(), media_type="text/event-stream")
+
+
+# =============================================================================
+# WebSocket Proxy API - Proxies to DashScope qwen3-livetranslate-flash-realtime
+# =============================================================================
+
+# Full language support per DashScope docs
+SUPPORTED_LANGUAGES = {
+    "en": {"name": "English", "audio": True},
+    "zh": {"name": "Chinese", "audio": True},
+    "ru": {"name": "Russian", "audio": True},
+    "fr": {"name": "French", "audio": True},
+    "de": {"name": "German", "audio": True},
+    "pt": {"name": "Portuguese", "audio": True},
+    "es": {"name": "Spanish", "audio": True},
+    "it": {"name": "Italian", "audio": True},
+    "ko": {"name": "Korean", "audio": True},
+    "ja": {"name": "Japanese", "audio": True},
+    "yue": {"name": "Cantonese", "audio": True},
+    "id": {"name": "Indonesian", "audio": False},  # Text only
+    "vi": {"name": "Vietnamese", "audio": False},  # Text only
+    "th": {"name": "Thai", "audio": False},  # Text only
+    "ar": {"name": "Arabic", "audio": False},  # Text only
+    "hi": {"name": "Hindi", "audio": False},  # Text only
+    "el": {"name": "Greek", "audio": False},  # Text only
+    "tr": {"name": "Turkish", "audio": False},  # Text only
+}
+
+# Full voice support per DashScope docs
+SUPPORTED_VOICES = {
+    "Cherry": {"description": "Sunny, positive, friendly female", "languages": ["zh", "en", "fr", "de", "ru", "it", "es", "pt", "ja", "ko"]},
+    "Nofish": {"description": "Designer voice, casual male", "languages": ["zh", "en", "fr", "de", "ru", "it", "es", "pt", "ja", "ko"]},
+    "Jada": {"description": "Lively Shanghainese woman", "languages": ["zh"]},
+    "Dylan": {"description": "Young Beijing man", "languages": ["zh"]},
+    "Sunny": {"description": "Sweet Sichuanese girl", "languages": ["zh"]},
+    "Peter": {"description": "Tianjin crosstalk style", "languages": ["zh"]},
+    "Kiki": {"description": "Sweet Hong Kong best friend", "languages": ["yue"]},
+    "Eric": {"description": "Sichuan male voice", "languages": ["zh"]},
+}
+
+
+@app.websocket("/v1/realtime")
+async def websocket_proxy(websocket: WebSocket):
+    """
+    WebSocket proxy to DashScope qwen3-livetranslate-flash-realtime.
+
+    This endpoint proxies all WebSocket messages to DashScope's real-time
+    translation API, allowing clients to use api.zen-live.hanzo.ai as
+    a drop-in replacement for dashscope-intl.aliyuncs.com.
+
+    Client Events (send to server):
+    - session.update: Configure session (language, voice, modalities)
+    - input_audio_buffer.append: Send Base64-encoded PCM16 audio
+    - input_image_buffer.append: Send Base64-encoded image for context
+
+    Server Events (receive from server):
+    - session.created: Initial session confirmation
+    - session.updated: Configuration update confirmation
+    - response.created: Translation started
+    - response.audio.delta: Incremental translated audio (Base64)
+    - response.audio_transcript.delta: Incremental transcript text
+    - response.audio_transcript.done: Complete transcript
+    - response.done: Response complete with usage stats
+    - error: Error details
+
+    See /api/spec for full API specification.
+    """
+    if not API_KEY:
+        await websocket.close(code=4001, reason="API_KEY not configured")
+        return
+
+    await websocket.accept()
+
+    upstream_ws = None
+    try:
+        # Connect to DashScope
+        upstream_ws = await connect(
+            API_URL,
+            additional_headers={"Authorization": f"Bearer {API_KEY}"},
+            ssl=ssl_context
+        )
+
+        async def forward_to_upstream():
+            """Forward client messages to DashScope."""
+            try:
+                while True:
+                    data = await websocket.receive_text()
+                    await upstream_ws.send(data)
+            except WebSocketDisconnect:
+                pass
+            except Exception as e:
+                print(f"Client->Upstream error: {e}")
+
+        async def forward_to_client():
+            """Forward DashScope responses to client."""
+            try:
+                async for message in upstream_ws:
+                    await websocket.send_text(message)
+            except Exception as e:
+                print(f"Upstream->Client error: {e}")
+
+        # Run both directions concurrently
+        await asyncio.gather(
+            forward_to_upstream(),
+            forward_to_client(),
+            return_exceptions=True
+        )
+
+    except Exception as e:
+        print(f"WebSocket proxy error: {e}")
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "error": {"message": str(e), "type": "proxy_error"}
+            }))
+        except:
+            pass
+    finally:
+        if upstream_ws:
+            await upstream_ws.close()
+
+
+@app.get("/api/spec")
+async def api_specification():
+    """
+    Full API specification for qwen3-livetranslate-flash-realtime.
+
+    This documents the WebSocket protocol for real-time translation.
+    """
+    return JSONResponse({
+        "name": "Zen Live Translation API",
+        "version": "1.0.0",
+        "description": "Real-time audio/video translation powered by Qwen3 LiveTranslate",
+        "websocket_endpoint": "/v1/realtime",
+        "protocol": "WebSocket",
+        "authentication": {
+            "type": "Bearer Token (handled by server)",
+            "note": "API key is configured server-side via API_KEY env var"
+        },
+        "client_events": {
+            "session.update": {
+                "description": "Update session configuration",
+                "example": {
+                    "event_id": "event_xxx",
+                    "type": "session.update",
+                    "session": {
+                        "modalities": ["text", "audio"],
+                        "voice": "Cherry",
+                        "input_audio_format": "pcm16",
+                        "output_audio_format": "pcm24",
+                        "input_audio_transcription": {"language": "es"},
+                        "translation": {"language": "en"}
+                    }
+                },
+                "parameters": {
+                    "modalities": "['text'] or ['text', 'audio']",
+                    "voice": "Voice ID (see /api/voices)",
+                    "input_audio_transcription.language": "Source language code",
+                    "translation.language": "Target language code"
+                }
+            },
+            "input_audio_buffer.append": {
+                "description": "Send audio data for translation",
+                "example": {
+                    "event_id": "event_xxx",
+                    "type": "input_audio_buffer.append",
+                    "audio": "<base64_pcm16_audio>"
+                },
+                "parameters": {
+                    "audio": "Base64-encoded PCM16 audio (16kHz, mono)"
+                }
+            },
+            "input_image_buffer.append": {
+                "description": "Send image for visual context (improves accuracy)",
+                "example": {
+                    "event_id": "event_xxx",
+                    "type": "input_image_buffer.append",
+                    "image": "<base64_jpeg_image>"
+                },
+                "parameters": {
+                    "image": "Base64-encoded JPEG image (max 1080p, 500KB)"
+                },
+                "notes": [
+                    "Max 2 images per second",
+                    "Must send audio first before images",
+                    "Helps with homonyms and proper nouns"
+                ]
+            }
+        },
+        "server_events": {
+            "session.created": "Session initialized with default config",
+            "session.updated": "Session config updated successfully",
+            "response.created": "Model started generating response",
+            "response.audio.delta": "Incremental audio chunk (Base64 PCM24)",
+            "response.audio.done": "Audio generation complete",
+            "response.audio_transcript.delta": "Incremental transcript text",
+            "response.audio_transcript.done": "Complete transcript with final text",
+            "response.text.delta": "Incremental text (text-only mode)",
+            "response.text.done": "Complete text (text-only mode)",
+            "response.done": "Response complete with usage statistics",
+            "error": "Error occurred"
+        },
+        "audio_format": {
+            "input": {"encoding": "pcm16", "sample_rate": 16000, "channels": 1},
+            "output": {"encoding": "pcm24", "sample_rate": 24000, "channels": 1}
+        },
+        "languages": SUPPORTED_LANGUAGES,
+        "voices": SUPPORTED_VOICES,
+        "billing": {
+            "audio": "12.5 tokens per second (input or output)",
+            "image": "0.5 tokens per 28x28 pixels"
+        },
+        "latency": "~3 seconds for simultaneous interpretation",
+        "links": {
+            "docs": "/docs",
+            "languages": "/api/languages",
+            "voices": "/api/voices",
+            "github": "https://github.com/zenlm/zen-live"
+        }
+    })
+
+
+@app.get("/api/languages")
+async def list_languages():
+    """List all supported languages with audio capability info."""
+    return JSONResponse({
+        "languages": [
+            {
+                "code": code,
+                "name": info["name"],
+                "audio_output": info["audio"],
+                "text_output": True
+            }
+            for code, info in SUPPORTED_LANGUAGES.items()
+        ],
+        "source_languages": list(SUPPORTED_LANGUAGES.keys()),
+        "target_languages_audio": [k for k, v in SUPPORTED_LANGUAGES.items() if v["audio"]],
+        "target_languages_text_only": [k for k, v in SUPPORTED_LANGUAGES.items() if not v["audio"]]
+    })
+
+
+@app.get("/api/voices")
+async def list_voices():
+    """List all supported TTS voices with language compatibility."""
+    return JSONResponse({
+        "voices": [
+            {
+                "id": voice_id,
+                "description": info["description"],
+                "supported_languages": info["languages"]
+            }
+            for voice_id, info in SUPPORTED_VOICES.items()
+        ],
+        "default": "Cherry",
+        "multilingual": ["Cherry", "Nofish"],
+        "regional": ["Jada", "Dylan", "Sunny", "Peter", "Kiki", "Eric"]
+    })
 
 
 def handle_exit(sig, frame):

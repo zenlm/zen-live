@@ -28,11 +28,17 @@ services:
       retries: 3
       start_period: 10s
     labels:
+      # Main UI: zen-live.hanzo.ai
       - "traefik.enable=true"
       - "traefik.http.routers.zen-live.rule=Host(`zen-live.hanzo.ai`)"
       - "traefik.http.routers.zen-live.entrypoints=websecure"
       - "traefik.http.routers.zen-live.tls.certresolver=letsencrypt"
       - "traefik.http.services.zen-live.loadbalancer.server.port=8000"
+      # API subdomain: api.zen-live.hanzo.ai
+      - "traefik.http.routers.zen-live-api.rule=Host(`api.zen-live.hanzo.ai`)"
+      - "traefik.http.routers.zen-live-api.entrypoints=websecure"
+      - "traefik.http.routers.zen-live-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.zen-live-api.service=zen-live"
     networks:
       - hanzo
 
