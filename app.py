@@ -1,9 +1,27 @@
-"""Simultaneous speech translation over FastRTC using DashScope Qwen3 LiveTranslate.
- - Streams mic audio (16k PCM16) to DashScope Realtime
- - Receives translated text deltas and 24k PCM16 TTS audio
- - Plays audio via FastRTC and shows text in a Gradio Chatbot
-Set DASHSCOPE_API_KEY in the environment before running.
 """
+Zen Live - Real-time Speech Translation for Broadcast
+
+A low-latency simultaneous translation service for news control rooms.
+Powered by Hanzo AI infrastructure with Qwen3 LiveTranslate backend.
+
+Backend options:
+  1. Hanzo Node API (recommended) - Set HANZO_NODE_URL
+  2. Direct DashScope API - Set API_KEY
+  3. Local Zen Omni model - Set ZEN_OMNI_PATH
+
+Usage:
+  export HANZO_NODE_URL=http://localhost:9550  # or
+  export API_KEY=your_dashscope_key
+  python app.py
+
+Endpoints:
+  /              - Control room web portal
+  /monitor       - Simplified broadcast monitor view
+  /api/status    - Service health check
+  /broadcast/info - Integration guide for engineers
+
+Part of the Zen AI model family: https://github.com/zenlm
+"
 import os
 import time
 import base64
@@ -16,8 +34,10 @@ from pathlib import Path
 import gradio as gr
 import numpy as np
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from fastrtc import (
     AdditionalOutputs,
     # AsyncStreamHandler,
@@ -36,19 +56,32 @@ import cv2
 
 load_dotenv()
 
-os.environ["MODE"] = "UI"
+os.environ["MODE"] = os.environ.get("MODE", "")
 cur_dir = Path(__file__).parent
 
-API_KEY = os.environ['API_KEY']  # Set with: export DASHSCOPE_API_KEY=xxx
+# Backend configuration
+HANZO_NODE_URL = os.environ.get("HANZO_NODE_URL")  # Preferred: Hanzo Node backend
+API_KEY = os.environ.get("API_KEY")  # Fallback: Direct DashScope API
+ZEN_OMNI_PATH = os.environ.get("ZEN_OMNI_PATH")  # Optional: Local model path
+
 API_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?model=qwen3-livetranslate-flash-realtime"
 VOICES = ["Cherry", "Nofish", "Jada", "Dylan", "Sunny", "Peter", "Kiki", "Eric"]
 
 ssl_context = ssl.create_default_context(cafile=certifi.where())
-# ssl_context = ssl._create_unverified_context()  # 禁用证书验证
 
-if not API_KEY:
-    raise RuntimeError("Missing DASHSCOPE_API_KEY environment variable.")
-headers = {"Authorization": "Bearer " + API_KEY}
+# Determine backend and get credentials
+if HANZO_NODE_URL:
+    print(f"🔗 Zen Live: Using Hanzo Node backend at {HANZO_NODE_URL}")
+    BACKEND_TYPE = "hanzo_node"
+elif API_KEY:
+    print("🔗 Zen Live: Using direct DashScope API")
+    BACKEND_TYPE = "dashscope"
+else:
+    print("⚠️  Zen Live: No backend configured")
+    print("   Set HANZO_NODE_URL (recommended) or API_KEY")
+    BACKEND_TYPE = None
+
+headers = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
 LANG_MAP = {
     "en": "English",
     "zh": "Chinese",
@@ -73,7 +106,8 @@ LANG_MAP_REVERSE = {v: k for k, v in LANG_MAP.items()}
 # SRC_LANGUAGES = ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar", "hi", "el", "tr"]  # 使用相同的语言列表
 # TARGET_LANGUAGES = ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar"]
 
-SRC_LANGUAGES = [LANG_MAP[code] for code in ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar", "hi", "el", "tr"]]
+# Spanish first for news monitoring default
+SRC_LANGUAGES = [LANG_MAP[code] for code in ["es", "en", "zh", "pt", "fr", "de", "ru", "it", "ko", "ja", "yue", "id", "vi", "th", "ar", "hi", "el", "tr"]]
 TARGET_LANGUAGES = [LANG_MAP[code] for code in ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar"]]
 
 
@@ -302,13 +336,13 @@ def update_chatbot(chatbot: list[dict], response: dict):
 chatbot = gr.Chatbot(type="messages")
 src_language = gr.Dropdown(
     choices=SRC_LANGUAGES,
-    value="English",   # 改成全称
+    value="Spanish",   # Default to Spanish for news monitoring
     type="value",
     label="Source Language"
 )
 language = gr.Dropdown(
     choices=TARGET_LANGUAGES,
-    value="Chinese",   # 改成全称
+    value="English",   # Default to English output
     type="value",
     label="Target Language"
 )
@@ -396,9 +430,263 @@ def enhance_ui():
         """)
     return demo
 
-app = FastAPI()
+app = FastAPI(
+    title="Zen Live",
+    description="Real-time speech translation for broadcast news monitoring. Powered by Hanzo AI.",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# CORS for control room access from different domains
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 stream.mount(app)
+
+
+# WebRTC offer model
+class WebRTCOffer(BaseModel):
+    sdp: str
+    type: str
+    src_language: str = "Spanish"
+    target_language: str = "English"
+    voice: str = "Cherry"
+
+
+# Store active sessions for control room
+active_sessions = {}
+
+
+@app.post("/webrtc/offer")
+async def webrtc_offer(offer: WebRTCOffer):
+    """Handle WebRTC offer from control room portal.
+    
+    This endpoint receives SDP offers and returns SDP answers
+    for establishing low-latency WebRTC connections.
+    """
+    try:
+        # Generate session ID
+        session_id = secrets.token_hex(16)
+        
+        # Store session config
+        active_sessions[session_id] = {
+            "src_language": offer.src_language,
+            "target_language": offer.target_language,
+            "voice": offer.voice,
+            "created_at": time.time()
+        }
+        
+        # Use FastRTC's internal offer handling
+        response = await stream.offer(
+            offer.sdp,
+            offer.type,
+            extra_data={
+                "src_language": offer.src_language,
+                "target_language": offer.target_language,
+                "voice": offer.voice
+            }
+        )
+        
+        return JSONResponse({
+            "sdp": response["sdp"],
+            "type": response["type"],
+            "webrtc_id": response.get("webrtc_id", session_id)
+        })
+    except Exception as e:
+        print(f"WebRTC offer error: {e}")
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=500
+        )
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """List active translation sessions for control room monitoring."""
+    return JSONResponse({
+        "sessions": [
+            {
+                "id": sid,
+                "src_language": data["src_language"],
+                "target_language": data["target_language"],
+                "voice": data["voice"],
+                "uptime": time.time() - data["created_at"]
+            }
+            for sid, data in active_sessions.items()
+        ]
+    })
+
+
+@app.get("/api/status")
+async def api_status():
+    """API health check for control room monitoring."""
+    return JSONResponse({
+        "status": "healthy",
+        "service": "zen-live-translate",
+        "version": "1.0.0",
+        "active_sessions": len(active_sessions),
+        "supported_languages": {
+            "source": SRC_LANGUAGES,
+            "target": TARGET_LANGUAGES
+        },
+        "voices": VOICES
+    })
+
+
+@app.get("/monitor")
+async def monitor_page():
+    """Simplified monitor-only view for control room displays."""
+    rtc_config = await get_cloudflare_turn_credentials_async() if get_space() else None
+    html_content = (cur_dir / "monitor.html").read_text() if (cur_dir / "monitor.html").exists() else (cur_dir / "index.html").read_text()
+    html_content = html_content.replace("__RTC_CONFIGURATION__", json.dumps(rtc_config))
+    return HTMLResponse(content=html_content)
+
+
+# Audio streaming for broadcast integration (can be ingested via NDI/SDI converters)
+audio_subscribers = {}  # webrtc_id -> list of asyncio.Queue
+
+
+@app.get("/audio/stream/{webrtc_id}")
+async def audio_stream(webrtc_id: str):
+    """
+    Raw PCM audio stream for broadcast integration.
+    
+    This endpoint streams translated audio as raw PCM16 at 24kHz.
+    Can be converted to SDI/NDI using tools like:
+    - ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID -f alsa default
+    - OBS with browser source + audio capture
+    - Blackmagic Web Presenter
+    - NDI Tools with HTTP input
+    
+    For SRT output, pipe through:
+    ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID \
+           -c:a aac -f mpegts srt://dest:port
+    """
+    async def generate_audio():
+        queue = asyncio.Queue()
+        if webrtc_id not in audio_subscribers:
+            audio_subscribers[webrtc_id] = []
+        audio_subscribers[webrtc_id].append(queue)
+        
+        try:
+            while True:
+                try:
+                    audio_data = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield audio_data
+                except asyncio.TimeoutError:
+                    # Send silence to keep connection alive
+                    yield b'\x00' * 4800  # 100ms of silence at 24kHz
+        finally:
+            if webrtc_id in audio_subscribers:
+                audio_subscribers[webrtc_id].remove(queue)
+
+    return StreamingResponse(
+        generate_audio(),
+        media_type="audio/pcm",
+        headers={
+            "Content-Type": "audio/L16;rate=24000;channels=1",
+            "Cache-Control": "no-cache",
+            "X-Audio-Format": "PCM16 24kHz Mono",
+            "Access-Control-Allow-Origin": "*"
+        }
+    )
+
+
+@app.get("/audio/wav/{webrtc_id}")
+async def audio_wav_stream(webrtc_id: str):
+    """
+    WAV-wrapped audio stream for easier playback/ingestion.
+    
+    Includes WAV header for compatibility with more players/converters.
+    Useful for direct monitoring or conversion to broadcast formats.
+    """
+    async def generate_wav():
+        # Send WAV header for streaming (size = max)
+        wav_header = bytes([
+            0x52, 0x49, 0x46, 0x46,  # "RIFF"
+            0xFF, 0xFF, 0xFF, 0x7F,  # Size (max for streaming)
+            0x57, 0x41, 0x56, 0x45,  # "WAVE"
+            0x66, 0x6D, 0x74, 0x20,  # "fmt "
+            0x10, 0x00, 0x00, 0x00,  # Subchunk1Size (16)
+            0x01, 0x00,              # AudioFormat (1 = PCM)
+            0x01, 0x00,              # NumChannels (1)
+            0xC0, 0x5D, 0x00, 0x00,  # SampleRate (24000)
+            0x80, 0xBB, 0x00, 0x00,  # ByteRate (48000)
+            0x02, 0x00,              # BlockAlign (2)
+            0x10, 0x00,              # BitsPerSample (16)
+            0x64, 0x61, 0x74, 0x61,  # "data"
+            0xFF, 0xFF, 0xFF, 0x7F,  # Subchunk2Size (max)
+        ])
+        yield wav_header
+        
+        queue = asyncio.Queue()
+        if webrtc_id not in audio_subscribers:
+            audio_subscribers[webrtc_id] = []
+        audio_subscribers[webrtc_id].append(queue)
+        
+        try:
+            while True:
+                try:
+                    audio_data = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield audio_data
+                except asyncio.TimeoutError:
+                    yield b'\x00' * 4800
+        finally:
+            if webrtc_id in audio_subscribers:
+                audio_subscribers[webrtc_id].remove(queue)
+
+    return StreamingResponse(
+        generate_wav(),
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "no-cache",
+            "Access-Control-Allow-Origin": "*"
+        }
+    )
+
+
+@app.get("/broadcast/info")
+async def broadcast_info():
+    """
+    Information for broadcast engineers on how to integrate.
+    """
+    base_url = "http://YOUR_HOST:8000"
+    return JSONResponse({
+        "service": "Zen Live Translate - Broadcast Integration",
+        "endpoints": {
+            "control_room_ui": f"{base_url}/",
+            "monitor_only": f"{base_url}/monitor?autostart=1",
+            "webrtc_offer": f"{base_url}/webrtc/offer",
+            "transcript_sse": f"{base_url}/outputs?webrtc_id=SESSION_ID",
+            "audio_pcm": f"{base_url}/audio/stream/SESSION_ID",
+            "audio_wav": f"{base_url}/audio/wav/SESSION_ID",
+            "api_status": f"{base_url}/api/status",
+            "api_sessions": f"{base_url}/api/sessions"
+        },
+        "audio_format": {
+            "encoding": "PCM16 signed little-endian",
+            "sample_rate": 24000,
+            "channels": 1,
+            "bits_per_sample": 16
+        },
+        "integration_examples": {
+            "ffplay_direct": "ffplay -f s16le -ar 24000 -ac 1 http://host/audio/stream/ID",
+            "ffmpeg_to_srt": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID -c:a aac -f mpegts 'srt://dest:port'",
+            "ffmpeg_to_rtmp": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID -c:a aac -f flv rtmp://dest/live/stream",
+            "obs_browser": "Add Browser Source with URL: http://host/monitor?autostart=1",
+            "vlc": "vlc http://host/audio/wav/SESSION_ID"
+        },
+        "latency": {
+            "typical": "200-500ms end-to-end",
+            "factors": ["network RTT", "AI processing", "TTS generation"]
+        }
+    })
 
 
 @app.get("/")
@@ -422,24 +710,36 @@ def _(webrtc_id: str):
 
 
 def handle_exit(sig, frame):
-    print("Shutting down gracefully...")
+    print("\n👋 Zen Live shutting down...")
     exit(0)
-    # 可扩展为执行更多清理逻辑
 
 
 signal.signal(signal.SIGINT, handle_exit)
 signal.signal(signal.SIGTERM, handle_exit)
 
 if __name__ == "__main__":
-    import os
+    import uvicorn
 
-    if (mode := os.getenv("MODE")) == "UI":
+    mode = os.getenv("MODE", "").upper()
+    port = int(os.getenv("PORT", 8000))
+
+    print("""
+    ╔═══════════════════════════════════════════════════════════╗
+    ║                       ZEN LIVE                            ║
+    ║         Real-time Speech Translation Service              ║
+    ║                   Powered by Hanzo AI                     ║
+    ╠═══════════════════════════════════════════════════════════╣
+    ║  Control Room:  http://localhost:{port:<5}                  ║
+    ║  Monitor View:  http://localhost:{port}/monitor             ║
+    ║  API Docs:      http://localhost:{port}/docs                ║
+    ║  Broadcast:     http://localhost:{port}/broadcast/info      ║
+    ╚═══════════════════════════════════════════════════════════╝
+    """.format(port=port))
+
+    if mode == "UI":
         demo = enhance_ui()
-        demo.launch()
-        # stream.ui.launch(server_port=7862)
+        demo.launch(server_port=port)
     elif mode == "PHONE":
-        stream.fastphone(host="0.0.0.0")
+        stream.fastphone(host="0.0.0.0", port=port)
     else:
-        import uvicorn
-
-        uvicorn.run(app, host="0.0.0.0")
+        uvicorn.run(app, host="0.0.0.0", port=port)

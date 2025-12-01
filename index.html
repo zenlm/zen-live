@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zen Live - Control Room</title>
+    <style>
+        :root {
+            --bg-dark: #1a1a2e;
+            --bg-panel: #16213e;
+            --accent: #0f3460;
+            --highlight: #e94560;
+            --text: #eee;
+            --text-muted: #888;
+            --success: #00d26a;
+            --warning: #ffc107;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .header {
+            background: var(--bg-panel);
+            padding: 12px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--accent);
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--highlight);
+        }
+
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-muted);
+        }
+
+        .status-dot.live {
+            background: var(--success);
+            animation: pulse 1.5s infinite;
+        }
+
+        .status-dot.warning {
+            background: var(--warning);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            height: calc(100vh - 60px);
+            gap: 0;
+        }
+
+        .video-section {
+            position: relative;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #videoElement {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        .video-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(transparent, rgba(0,0,0,0.8));
+            padding: 40px 24px 24px;
+        }
+
+        .live-caption {
+            font-size: 1.4rem;
+            line-height: 1.6;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            min-height: 80px;
+        }
+
+        .live-caption .stable {
+            color: #fff;
+        }
+
+        .live-caption .interim {
+            color: #aaa;
+            font-style: italic;
+        }
+
+        .sidebar {
+            background: var(--bg-panel);
+            display: flex;
+            flex-direction: column;
+            border-left: 2px solid var(--accent);
+        }
+
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--accent);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+        }
+
+        .controls-section {
+            padding: 16px;
+            border-bottom: 1px solid var(--accent);
+        }
+
+        .control-group {
+            margin-bottom: 16px;
+        }
+
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        select, input {
+            width: 100%;
+            padding: 10px 12px;
+            background: var(--bg-dark);
+            border: 1px solid var(--accent);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 0.95rem;
+        }
+
+        select:focus, input:focus {
+            outline: none;
+            border-color: var(--highlight);
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 16px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: var(--highlight);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #ff5a75;
+        }
+
+        .btn-primary:disabled {
+            background: var(--text-muted);
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: var(--accent);
+            color: var(--text);
+        }
+
+        .btn-secondary:hover {
+            background: #1a4080;
+        }
+
+        .btn-stop {
+            background: #dc3545;
+            color: white;
+        }
+
+        .transcript-section {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .transcript-log {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .transcript-entry {
+            padding: 12px;
+            margin-bottom: 8px;
+            background: var(--bg-dark);
+            border-radius: 8px;
+            border-left: 3px solid var(--highlight);
+        }
+
+        .transcript-entry .time {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .transcript-entry .text {
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
+        .audio-monitor {
+            padding: 16px;
+            border-top: 1px solid var(--accent);
+            background: var(--bg-dark);
+        }
+
+        .audio-level {
+            height: 8px;
+            background: var(--accent);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .audio-level-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--success), var(--warning), var(--highlight));
+            transition: width 0.1s;
+        }
+
+        .latency-display {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 12px;
+            font-size: 0.8rem;
+        }
+
+        .latency-value {
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        .latency-value.high {
+            color: var(--warning);
+        }
+
+        .output-endpoints {
+            padding: 16px;
+            border-top: 1px solid var(--accent);
+        }
+
+        .endpoint-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            font-size: 0.85rem;
+        }
+
+        .endpoint-url {
+            font-family: monospace;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+        }
+
+        .copy-btn {
+            background: var(--accent);
+            border: none;
+            color: var(--text);
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+        }
+
+        .fullscreen-toggle {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: rgba(0,0,0,0.6);
+            border: none;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        /* Monitor-only mode */
+        body.monitor-mode .sidebar {
+            display: none;
+        }
+
+        body.monitor-mode .main-container {
+            grid-template-columns: 1fr;
+        }
+
+        body.monitor-mode .header {
+            padding: 8px 16px;
+        }
+
+        /* Audio output indicator */
+        .audio-output-indicator {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: var(--bg-panel);
+            padding: 12px 20px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border: 1px solid var(--accent);
+            z-index: 1000;
+        }
+
+        .speaker-icon {
+            font-size: 1.5rem;
+        }
+
+        .speaker-icon.active {
+            animation: speaker-pulse 0.5s infinite alternate;
+        }
+
+        @keyframes speaker-pulse {
+            from { transform: scale(1); }
+            to { transform: scale(1.1); }
+        }
+
+        /* Hidden audio element for TTS playback */
+        #audioOutput {
+            display: none;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .main-container {
+                grid-template-columns: 1fr;
+                grid-template-rows: 1fr 1fr;
+            }
+
+            .sidebar {
+                border-left: none;
+                border-top: 2px solid var(--accent);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">ZEN LIVE</div>
+        <div class="status-bar">
+            <div class="status-item">
+                <div class="status-dot" id="connectionStatus"></div>
+                <span id="connectionText">Disconnected</span>
+            </div>
+            <div class="status-item">
+                <div class="status-dot" id="audioStatus"></div>
+                <span>Audio</span>
+            </div>
+            <div class="status-item">
+                <span id="latencyDisplay">Latency: --ms</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="video-section">
+            <video id="videoElement" autoplay muted playsinline></video>
+            <button class="fullscreen-toggle" onclick="toggleFullscreen()">Fullscreen</button>
+            <div class="video-overlay">
+                <div class="live-caption" id="liveCaption">
+                    <span class="stable"></span>
+                    <span class="interim"></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="sidebar-header">Control Panel</div>
+
+            <div class="controls-section">
+                <div class="control-group">
+                    <label>Source Language</label>
+                    <select id="srcLanguage">
+                        <option value="Spanish" selected>Spanish (Espanol)</option>
+                        <option value="English">English</option>
+                        <option value="Chinese">Chinese (Mandarin)</option>
+                        <option value="Portuguese">Portuguese</option>
+                        <option value="French">French</option>
+                        <option value="German">German</option>
+                        <option value="Italian">Italian</option>
+                        <option value="Russian">Russian</option>
+                        <option value="Arabic">Arabic</option>
+                        <option value="Japanese">Japanese</option>
+                        <option value="Korean">Korean</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>Target Language</label>
+                    <select id="targetLanguage">
+                        <option value="English" selected>English</option>
+                        <option value="Spanish">Spanish (Espanol)</option>
+                        <option value="Chinese">Chinese (Mandarin)</option>
+                        <option value="Portuguese">Portuguese</option>
+                        <option value="French">French</option>
+                        <option value="German">German</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>Voice</label>
+                    <select id="voiceSelect">
+                        <option value="Cherry">Cherry (Female)</option>
+                        <option value="Dylan">Dylan (Male)</option>
+                        <option value="Jada">Jada (Female)</option>
+                        <option value="Peter">Peter (Male)</option>
+                        <option value="Sunny">Sunny (Female)</option>
+                        <option value="Eric">Eric (Male)</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>Input Source</label>
+                    <select id="inputSource">
+                        <option value="camera">Camera/Webcam</option>
+                        <option value="screen">Screen Capture</option>
+                        <option value="srt">SRT Input (URL)</option>
+                    </select>
+                </div>
+
+                <div class="control-group" id="srtInputGroup" style="display:none;">
+                    <label>SRT Input URL</label>
+                    <input type="text" id="srtUrl" placeholder="srt://ip:port?streamid=...">
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn btn-primary" id="startBtn" onclick="startStream()">
+                        Start
+                    </button>
+                    <button class="btn btn-stop" id="stopBtn" onclick="stopStream()" disabled>
+                        Stop
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar-header">Transcript</div>
+            <div class="transcript-section">
+                <div class="transcript-log" id="transcriptLog"></div>
+            </div>
+
+            <div class="audio-monitor">
+                <label>Audio Output Level</label>
+                <div class="audio-level">
+                    <div class="audio-level-bar" id="audioLevelBar"></div>
+                </div>
+                <div class="latency-display">
+                    <span>End-to-end latency:</span>
+                    <span class="latency-value" id="e2eLatency">--ms</span>
+                </div>
+            </div>
+
+            <div class="output-endpoints">
+                <div class="sidebar-header" style="padding: 0 0 12px 0;">Output Endpoints</div>
+                <div class="endpoint-item">
+                    <div>
+                        <div>WebRTC Audio</div>
+                        <div class="endpoint-url" id="webrtcUrl">--</div>
+                    </div>
+                    <button class="copy-btn" onclick="copyEndpoint('webrtc')">Copy</button>
+                </div>
+                <div class="endpoint-item">
+                    <div>
+                        <div>Audio Stream (SSE)</div>
+                        <div class="endpoint-url" id="sseUrl">--</div>
+                    </div>
+                    <button class="copy-btn" onclick="copyEndpoint('sse')">Copy</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="audio-output-indicator" id="audioIndicator" style="display:none;">
+        <span class="speaker-icon" id="speakerIcon">🔊</span>
+        <span>Translated audio playing</span>
+    </div>
+
+    <audio id="audioOutput"></audio>
+
+    <script type="module">
+        const RTC_CONFIG = __RTC_CONFIGURATION__;
+
+        let peerConnection = null;
+        let webrtcId = null;
+        let mediaStream = null;
+        let audioContext = null;
+        let audioAnalyser = null;
+        let isStreaming = false;
+        let latencyStart = 0;
+
+        const videoElement = document.getElementById('videoElement');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const connectionText = document.getElementById('connectionText');
+        const audioStatus = document.getElementById('audioStatus');
+        const liveCaption = document.getElementById('liveCaption');
+        const transcriptLog = document.getElementById('transcriptLog');
+        const audioLevelBar = document.getElementById('audioLevelBar');
+        const e2eLatency = document.getElementById('e2eLatency');
+        const audioIndicator = document.getElementById('audioIndicator');
+        const speakerIcon = document.getElementById('speakerIcon');
+        const inputSource = document.getElementById('inputSource');
+        const srtInputGroup = document.getElementById('srtInputGroup');
+
+        // Update URLs display
+        const baseUrl = window.location.origin;
+        document.getElementById('webrtcUrl').textContent = `${baseUrl}/webrtc`;
+        document.getElementById('sseUrl').textContent = `${baseUrl}/outputs?webrtc_id=...`;
+
+        // Input source toggle
+        inputSource.addEventListener('change', (e) => {
+            srtInputGroup.style.display = e.target.value === 'srt' ? 'block' : 'none';
+        });
+
+        async function startStream() {
+            try {
+                startBtn.disabled = true;
+                updateStatus('connecting');
+
+                const sourceType = inputSource.value;
+
+                // Get media based on source type
+                if (sourceType === 'camera') {
+                    mediaStream = await navigator.mediaDevices.getUserMedia({
+                        video: { width: 1280, height: 720, facingMode: 'environment' },
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            sampleRate: 16000
+                        }
+                    });
+                } else if (sourceType === 'screen') {
+                    mediaStream = await navigator.mediaDevices.getDisplayMedia({
+                        video: { width: 1920, height: 1080 },
+                        audio: true
+                    });
+                }
+
+                videoElement.srcObject = mediaStream;
+
+                // Setup WebRTC
+                await setupWebRTC();
+
+            } catch (err) {
+                console.error('Error starting stream:', err);
+                updateStatus('error');
+                startBtn.disabled = false;
+                alert('Failed to start: ' + err.message);
+            }
+        }
+
+        async function setupWebRTC() {
+            const config = RTC_CONFIG || {
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            };
+
+            peerConnection = new RTCPeerConnection(config);
+
+            // Add tracks
+            mediaStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, mediaStream);
+            });
+
+            // Handle incoming audio (translated TTS)
+            peerConnection.ontrack = (event) => {
+                console.log('Received remote track:', event.track.kind);
+                if (event.track.kind === 'audio') {
+                    const audio = document.getElementById('audioOutput');
+                    audio.srcObject = event.streams[0];
+                    audio.play().catch(e => console.log('Audio play error:', e));
+
+                    audioIndicator.style.display = 'flex';
+                    audioStatus.classList.add('live');
+
+                    // Setup audio visualization
+                    setupAudioVisualization(event.streams[0]);
+                }
+            };
+
+            // ICE handling
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    // Send candidate to server
+                }
+            };
+
+            peerConnection.onconnectionstatechange = () => {
+                console.log('Connection state:', peerConnection.connectionState);
+                if (peerConnection.connectionState === 'connected') {
+                    updateStatus('live');
+                    isStreaming = true;
+                    stopBtn.disabled = false;
+                    latencyStart = Date.now();
+                } else if (peerConnection.connectionState === 'failed') {
+                    updateStatus('error');
+                }
+            };
+
+            // Create offer
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+
+            // Wait for ICE gathering
+            await new Promise((resolve) => {
+                if (peerConnection.iceGatheringState === 'complete') {
+                    resolve();
+                } else {
+                    peerConnection.onicegatheringstatechange = () => {
+                        if (peerConnection.iceGatheringState === 'complete') resolve();
+                    };
+                    // Timeout fallback
+                    setTimeout(resolve, 2000);
+                }
+            });
+
+            // Send to server
+            const srcLang = document.getElementById('srcLanguage').value;
+            const targetLang = document.getElementById('targetLanguage').value;
+            const voice = document.getElementById('voiceSelect').value;
+
+            const response = await fetch('/webrtc/offer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sdp: peerConnection.localDescription.sdp,
+                    type: peerConnection.localDescription.type,
+                    src_language: srcLang,
+                    target_language: targetLang,
+                    voice: voice
+                })
+            });
+
+            const data = await response.json();
+            webrtcId = data.webrtc_id;
+
+            // Set remote description
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({
+                sdp: data.sdp,
+                type: data.type
+            }));
+
+            // Start listening for outputs (transcripts)
+            startOutputListener();
+        }
+
+        function startOutputListener() {
+            if (!webrtcId) return;
+
+            const evtSource = new EventSource(`/outputs?webrtc_id=${webrtcId}`);
+
+            evtSource.addEventListener('output', (e) => {
+                const data = JSON.parse(e.data);
+                updateTranscript(data);
+
+                // Update latency display
+                const now = Date.now();
+                const latency = now - latencyStart;
+                if (latency < 5000) {
+                    e2eLatency.textContent = `${latency}ms`;
+                    e2eLatency.className = latency > 500 ? 'latency-value high' : 'latency-value';
+                }
+            });
+
+            evtSource.onerror = () => {
+                console.log('SSE connection error, reconnecting...');
+            };
+        }
+
+        function updateTranscript(data) {
+            const content = data.content || '';
+
+            // Parse HTML content for stable/interim text
+            const stableMatch = content.match(/<span style='color:black'>([^<]*)<\/span>/);
+            const interimMatch = content.match(/<span style='color:gray'>([^<]*)<\/span>/);
+
+            const stableText = stableMatch ? stableMatch[1] : '';
+            const interimText = interimMatch ? interimMatch[1] : '';
+
+            // Update live caption
+            liveCaption.querySelector('.stable').textContent = stableText;
+            liveCaption.querySelector('.interim').textContent = interimText;
+
+            // Add to transcript log if message is complete
+            if (data.new_message === false && stableText && !interimText) {
+                addTranscriptEntry(stableText);
+            }
+
+            // Reset latency timer for next segment
+            latencyStart = Date.now();
+        }
+
+        function addTranscriptEntry(text) {
+            const entry = document.createElement('div');
+            entry.className = 'transcript-entry';
+            entry.innerHTML = `
+                <div class="time">${new Date().toLocaleTimeString()}</div>
+                <div class="text">${text}</div>
+            `;
+            transcriptLog.appendChild(entry);
+            transcriptLog.scrollTop = transcriptLog.scrollHeight;
+        }
+
+        function setupAudioVisualization(stream) {
+            audioContext = new AudioContext();
+            audioAnalyser = audioContext.createAnalyser();
+            const source = audioContext.createMediaStreamSource(stream);
+            source.connect(audioAnalyser);
+
+            audioAnalyser.fftSize = 256;
+            const bufferLength = audioAnalyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+
+            function updateLevel() {
+                if (!isStreaming) return;
+
+                audioAnalyser.getByteFrequencyData(dataArray);
+                const average = dataArray.reduce((a, b) => a + b) / bufferLength;
+                const level = Math.min(100, (average / 128) * 100);
+
+                audioLevelBar.style.width = `${level}%`;
+                speakerIcon.className = level > 10 ? 'speaker-icon active' : 'speaker-icon';
+
+                requestAnimationFrame(updateLevel);
+            }
+
+            updateLevel();
+        }
+
+        function stopStream() {
+            isStreaming = false;
+
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+
+            videoElement.srcObject = null;
+            audioIndicator.style.display = 'none';
+
+            updateStatus('disconnected');
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        }
+
+        function updateStatus(status) {
+            connectionStatus.className = 'status-dot';
+            audioStatus.className = 'status-dot';
+
+            switch (status) {
+                case 'connecting':
+                    connectionText.textContent = 'Connecting...';
+                    connectionStatus.classList.add('warning');
+                    break;
+                case 'live':
+                    connectionText.textContent = 'LIVE';
+                    connectionStatus.classList.add('live');
+                    break;
+                case 'error':
+                    connectionText.textContent = 'Error';
+                    break;
+                default:
+                    connectionText.textContent = 'Disconnected';
+            }
+        }
+
+        window.toggleFullscreen = function() {
+            const videoSection = document.querySelector('.video-section');
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else {
+                videoSection.requestFullscreen();
+            }
+        };
+
+        window.copyEndpoint = function(type) {
+            const url = type === 'webrtc'
+                ? document.getElementById('webrtcUrl').textContent
+                : document.getElementById('sseUrl').textContent.replace('...', webrtcId || 'SESSION_ID');
+            navigator.clipboard.writeText(url);
+            alert('Copied to clipboard!');
+        };
+
+        window.startStream = startStream;
+        window.stopStream = stopStream;
+
+        // Keyboard shortcuts for control room
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'F11') {
+                e.preventDefault();
+                toggleFullscreen();
+            }
+            if (e.key === 'm' && e.ctrlKey) {
+                document.body.classList.toggle('monitor-mode');
+            }
+        });
+    </script>
+</body>
+</html>

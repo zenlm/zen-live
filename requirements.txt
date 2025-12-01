@@ -7,3 +7,6 @@ fastrtc
 openai
 twilio
 opencv-python
+pydantic
+gradio
+certifi

@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zen Live Monitor - Spanish News Feed</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #000;
+            color: #fff;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .monitor-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #videoElement {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        /* Status bar - minimal */
+        .status-bar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: linear-gradient(rgba(0,0,0,0.8), transparent);
+            font-size: 0.85rem;
+            z-index: 100;
+        }
+
+        .status-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .live-badge {
+            background: #e94560;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-weight: 700;
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            animation: live-pulse 2s infinite;
+        }
+
+        @keyframes live-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .language-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+
+        .status-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            color: #aaa;
+        }
+
+        .latency {
+            font-family: monospace;
+        }
+
+        .latency.good { color: #00d26a; }
+        .latency.warn { color: #ffc107; }
+        .latency.bad { color: #e94560; }
+
+        /* Caption overlay */
+        .caption-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 60px 40px 40px;
+            background: linear-gradient(transparent, rgba(0,0,0,0.9));
+        }
+
+        .caption-text {
+            font-size: 2rem;
+            line-height: 1.5;
+            text-shadow: 2px 2px 8px rgba(0,0,0,0.9);
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .caption-text .stable {
+            color: #fff;
+        }
+
+        .caption-text .interim {
+            color: #888;
+            font-style: italic;
+        }
+
+        /* Audio indicator */
+        .audio-indicator {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0,0,0,0.6);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+        }
+
+        .audio-bars {
+            display: flex;
+            gap: 2px;
+            height: 20px;
+            align-items: flex-end;
+        }
+
+        .audio-bar {
+            width: 3px;
+            background: #00d26a;
+            border-radius: 2px;
+            animation: audio-wave 0.5s ease-in-out infinite;
+        }
+
+        .audio-bar:nth-child(1) { animation-delay: 0s; }
+        .audio-bar:nth-child(2) { animation-delay: 0.1s; }
+        .audio-bar:nth-child(3) { animation-delay: 0.2s; }
+        .audio-bar:nth-child(4) { animation-delay: 0.3s; }
+        .audio-bar:nth-child(5) { animation-delay: 0.4s; }
+
+        @keyframes audio-wave {
+            0%, 100% { height: 4px; }
+            50% { height: 20px; }
+        }
+
+        .audio-bars.silent .audio-bar {
+            animation: none;
+            height: 4px;
+            background: #666;
+        }
+
+        /* Connection overlay */
+        .connection-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 24px;
+            z-index: 200;
+        }
+
+        .connection-overlay.hidden {
+            display: none;
+        }
+
+        .connection-overlay h2 {
+            font-size: 1.5rem;
+            font-weight: 400;
+        }
+
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid #333;
+            border-top-color: #e94560;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .start-btn {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 16px 48px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .start-btn:hover {
+            background: #ff5a75;
+        }
+
+        /* Quick settings popup */
+        .settings-popup {
+            position: absolute;
+            top: 60px;
+            right: 20px;
+            background: rgba(30, 30, 50, 0.95);
+            padding: 20px;
+            border-radius: 12px;
+            z-index: 150;
+            min-width: 250px;
+            display: none;
+        }
+
+        .settings-popup.visible {
+            display: block;
+        }
+
+        .settings-popup label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .settings-popup select {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 16px;
+            background: #1a1a2e;
+            border: 1px solid #333;
+            color: white;
+            border-radius: 4px;
+        }
+
+        .settings-btn {
+            background: rgba(255,255,255,0.1);
+            border: none;
+            color: #888;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+
+        .settings-btn:hover {
+            background: rgba(255,255,255,0.2);
+            color: #fff;
+        }
+
+        /* Hidden audio */
+        #audioOutput {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="monitor-container">
+        <video id="videoElement" autoplay muted playsinline></video>
+
+        <div class="status-bar">
+            <div class="status-left">
+                <span class="live-badge" id="liveBadge" style="display:none;">LIVE</span>
+                <span class="language-badge" id="langBadge">ES → EN</span>
+            </div>
+            <div class="status-right">
+                <span class="latency" id="latencyDisplay">--ms</span>
+                <span id="timeDisplay"></span>
+                <button class="settings-btn" onclick="toggleSettings()">Settings</button>
+            </div>
+        </div>
+
+        <div class="caption-overlay">
+            <div class="caption-text" id="captionText">
+                <span class="stable"></span>
+                <span class="interim"></span>
+            </div>
+        </div>
+
+        <div class="audio-indicator" id="audioIndicator" style="display:none;">
+            <div class="audio-bars" id="audioBars">
+                <div class="audio-bar"></div>
+                <div class="audio-bar"></div>
+                <div class="audio-bar"></div>
+                <div class="audio-bar"></div>
+                <div class="audio-bar"></div>
+            </div>
+            <span>Translated Audio</span>
+        </div>
+
+        <div class="connection-overlay" id="connectionOverlay">
+            <h2>Zen Live Monitor</h2>
+            <p>Spanish → English Real-time Translation</p>
+            <button class="start-btn" onclick="startMonitor()">Start Monitor</button>
+        </div>
+
+        <div class="settings-popup" id="settingsPopup">
+            <label>Source Language</label>
+            <select id="srcLang">
+                <option value="Spanish" selected>Spanish</option>
+                <option value="English">English</option>
+                <option value="Portuguese">Portuguese</option>
+                <option value="French">French</option>
+                <option value="Chinese">Chinese</option>
+            </select>
+
+            <label>Target Language</label>
+            <select id="targetLang">
+                <option value="English" selected>English</option>
+                <option value="Spanish">Spanish</option>
+                <option value="Chinese">Chinese</option>
+                <option value="Portuguese">Portuguese</option>
+            </select>
+
+            <label>Voice</label>
+            <select id="voiceSelect">
+                <option value="Cherry">Cherry (F)</option>
+                <option value="Dylan">Dylan (M)</option>
+                <option value="Jada">Jada (F)</option>
+                <option value="Peter">Peter (M)</option>
+            </select>
+        </div>
+    </div>
+
+    <audio id="audioOutput"></audio>
+
+    <script type="module">
+        const RTC_CONFIG = __RTC_CONFIGURATION__;
+
+        let pc = null;
+        let webrtcId = null;
+        let mediaStream = null;
+        let latencyStart = 0;
+
+        const video = document.getElementById('videoElement');
+        const captionText = document.getElementById('captionText');
+        const connectionOverlay = document.getElementById('connectionOverlay');
+        const liveBadge = document.getElementById('liveBadge');
+        const langBadge = document.getElementById('langBadge');
+        const latencyDisplay = document.getElementById('latencyDisplay');
+        const audioIndicator = document.getElementById('audioIndicator');
+        const audioBars = document.getElementById('audioBars');
+
+        // Update time display
+        setInterval(() => {
+            document.getElementById('timeDisplay').textContent =
+                new Date().toLocaleTimeString('en-US', { hour12: false });
+        }, 1000);
+
+        window.toggleSettings = function() {
+            document.getElementById('settingsPopup').classList.toggle('visible');
+        };
+
+        window.startMonitor = async function() {
+            try {
+                connectionOverlay.innerHTML = '<div class="spinner"></div><h2>Connecting...</h2>';
+
+                // Get camera/mic
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 1920, height: 1080 },
+                    audio: { sampleRate: 16000, echoCancellation: true }
+                });
+
+                video.srcObject = mediaStream;
+
+                // Setup WebRTC
+                const config = RTC_CONFIG || { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+                pc = new RTCPeerConnection(config);
+
+                mediaStream.getTracks().forEach(track => pc.addTrack(track, mediaStream));
+
+                pc.ontrack = (event) => {
+                    if (event.track.kind === 'audio') {
+                        const audio = document.getElementById('audioOutput');
+                        audio.srcObject = event.streams[0];
+                        audio.play();
+                        audioIndicator.style.display = 'flex';
+                    }
+                };
+
+                pc.onconnectionstatechange = () => {
+                    if (pc.connectionState === 'connected') {
+                        connectionOverlay.classList.add('hidden');
+                        liveBadge.style.display = 'block';
+                        latencyStart = Date.now();
+                    }
+                };
+
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                // Wait for ICE
+                await new Promise(r => {
+                    if (pc.iceGatheringState === 'complete') r();
+                    else pc.onicegatheringstatechange = () => {
+                        if (pc.iceGatheringState === 'complete') r();
+                    };
+                    setTimeout(r, 2000);
+                });
+
+                const srcLang = document.getElementById('srcLang').value;
+                const targetLang = document.getElementById('targetLang').value;
+                const voice = document.getElementById('voiceSelect').value;
+
+                langBadge.textContent = `${srcLang.slice(0,2).toUpperCase()} → ${targetLang.slice(0,2).toUpperCase()}`;
+
+                const resp = await fetch('/webrtc/offer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sdp: pc.localDescription.sdp,
+                        type: pc.localDescription.type,
+                        src_language: srcLang,
+                        target_language: targetLang,
+                        voice: voice
+                    })
+                });
+
+                const data = await resp.json();
+                webrtcId = data.webrtc_id;
+
+                await pc.setRemoteDescription(new RTCSessionDescription({
+                    sdp: data.sdp,
+                    type: data.type
+                }));
+
+                // Listen for transcripts
+                const evtSource = new EventSource(`/outputs?webrtc_id=${webrtcId}`);
+                evtSource.addEventListener('output', (e) => {
+                    const d = JSON.parse(e.data);
+                    updateCaption(d);
+                });
+
+            } catch (err) {
+                console.error(err);
+                connectionOverlay.innerHTML = `<h2>Error</h2><p>${err.message}</p><button class="start-btn" onclick="location.reload()">Retry</button>`;
+            }
+        };
+
+        function updateCaption(data) {
+            const content = data.content || '';
+            const stableMatch = content.match(/<span style='color:black'>([^<]*)<\/span>/);
+            const interimMatch = content.match(/<span style='color:gray'>([^<]*)<\/span>/);
+
+            captionText.querySelector('.stable').textContent = stableMatch ? stableMatch[1] : '';
+            captionText.querySelector('.interim').textContent = interimMatch ? interimMatch[1] : '';
+
+            // Update latency
+            const latency = Date.now() - latencyStart;
+            if (latency < 10000) {
+                latencyDisplay.textContent = `${latency}ms`;
+                latencyDisplay.className = latency < 300 ? 'latency good' : latency < 800 ? 'latency warn' : 'latency bad';
+            }
+            latencyStart = Date.now();
+
+            // Animate audio bars when there's new content
+            if (stableMatch || interimMatch) {
+                audioBars.classList.remove('silent');
+                setTimeout(() => audioBars.classList.add('silent'), 500);
+            }
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'f' || e.key === 'F11') {
+                e.preventDefault();
+                document.documentElement.requestFullscreen?.();
+            }
+            if (e.key === 'Escape' && document.fullscreenElement) {
+                document.exitFullscreen();
+            }
+        });
+
+        // Auto-start with URL param
+        if (new URLSearchParams(location.search).get('autostart') === '1') {
+            startMonitor();
+        }
+    </script>
+</body>
+</html>
