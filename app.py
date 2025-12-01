@@ -21,7 +21,7 @@ Endpoints:
   /broadcast/info - Integration guide for engineers
 
 Part of the Zen AI model family: https://github.com/zenlm
-"
+"""
 import os
 import time
 import base64
@@ -34,9 +34,10 @@ from pathlib import Path
 import gradio as gr
 import numpy as np
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 from fastrtc import (
     AdditionalOutputs,
@@ -64,7 +65,77 @@ HANZO_NODE_URL = os.environ.get("HANZO_NODE_URL")  # Preferred: Hanzo Node backe
 API_KEY = os.environ.get("API_KEY")  # Fallback: Direct DashScope API
 ZEN_OMNI_PATH = os.environ.get("ZEN_OMNI_PATH")  # Optional: Local model path
 
+# Authentication (optional - set both to enable)
+AUTH_USER = os.environ.get("ZEN_LIVE_USER")  # e.g., psigg@americasvoice.news
+AUTH_PASS = os.environ.get("ZEN_LIVE_PASS")  # e.g., livedemo2025
+AUTH_ENABLED = bool(AUTH_USER and AUTH_PASS)
+
+# Input source configuration (defaults, can be overridden via web UI localStorage)
+SRT_INPUT_URL = os.environ.get("SRT_INPUT_URL")  # e.g., srt://source:9000?mode=caller
+RTMP_INPUT_URL = os.environ.get("RTMP_INPUT_URL")  # e.g., rtmp://source/live/stream
+WHIP_ENABLED = os.environ.get("WHIP_ENABLED", "true").lower() == "true"  # WebRTC WHIP input
+
 API_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?model=qwen3-livetranslate-flash-realtime"
+
+# HTTP Basic Auth setup
+security = HTTPBasic()
+
+
+def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
+    """Verify HTTP Basic Auth credentials if authentication is enabled."""
+    if not AUTH_ENABLED:
+        return True  # Auth disabled, allow all
+
+    # Use constant-time comparison to prevent timing attacks
+    correct_username = secrets.compare_digest(credentials.username, AUTH_USER)
+    correct_password = secrets.compare_digest(credentials.password, AUTH_PASS)
+
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Basic realm='Zen Live'"},
+        )
+    return True
+
+
+def optional_auth(request: Request):
+    """Optional auth - only require if AUTH_ENABLED is True."""
+    if not AUTH_ENABLED:
+        return True
+
+    # Check for Authorization header
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Basic "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Basic realm='Zen Live'"},
+        )
+
+    try:
+        credentials = base64.b64decode(auth_header[6:]).decode("utf-8")
+        username, password = credentials.split(":", 1)
+
+        correct_username = secrets.compare_digest(username, AUTH_USER)
+        correct_password = secrets.compare_digest(password, AUTH_PASS)
+
+        if not (correct_username and correct_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+                headers={"WWW-Authenticate": "Basic realm='Zen Live'"},
+            )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authorization header",
+            headers={"WWW-Authenticate": "Basic realm='Zen Live'"},
+        )
+
+    return True
+
+
 VOICES = ["Cherry", "Nofish", "Jada", "Dylan", "Sunny", "Peter", "Kiki", "Eric"]
 
 ssl_context = ssl.create_default_context(cafile=certifi.where())
@@ -506,9 +577,168 @@ async def webrtc_offer(offer: WebRTCOffer):
         )
 
 
+# WHIP endpoint for external WebRTC ingestion (broadcaster-friendly)
+whip_sessions = {}  # session_id -> session config
+
+
+class WHIPOffer(BaseModel):
+    """WHIP offer model for external stream ingestion."""
+    sdp: str
+    type: str = "offer"
+
+
+@app.post("/whip")
+async def whip_ingest(
+    request: Request,
+    src_language: str = "Spanish",
+    target_language: str = "English",
+    voice: str = "Cherry",
+    _auth: bool = Depends(optional_auth)
+):
+    """
+    WHIP (WebRTC-HTTP Ingestion Protocol) endpoint for broadcaster ingestion.
+
+    This allows external encoders/broadcasters to push WebRTC streams for translation.
+    Compatible with OBS, FFmpeg, GStreamer, and professional broadcast encoders.
+
+    Usage with FFmpeg:
+        ffmpeg -re -i input.mp4 -c:v libvpx -c:a opus -f webrtc http://host/whip
+
+    Usage with GStreamer:
+        gst-launch-1.0 ... ! webrtcsink signaller::uri=http://host/whip
+
+    Query params:
+        src_language: Source language (default: Spanish)
+        target_language: Target language (default: English)
+        voice: TTS voice (default: Cherry)
+    """
+    if not WHIP_ENABLED:
+        raise HTTPException(status_code=403, detail="WHIP ingestion is disabled")
+
+    # Read SDP from request body
+    body = await request.body()
+    content_type = request.headers.get("Content-Type", "")
+
+    if "application/sdp" in content_type:
+        sdp = body.decode("utf-8")
+    else:
+        # Try to parse as JSON
+        try:
+            data = json.loads(body)
+            sdp = data.get("sdp", body.decode("utf-8"))
+        except json.JSONDecodeError:
+            sdp = body.decode("utf-8")
+
+    session_id = secrets.token_hex(16)
+
+    # Store session config
+    whip_sessions[session_id] = {
+        "src_language": src_language,
+        "target_language": target_language,
+        "voice": voice,
+        "created_at": time.time(),
+        "type": "whip_ingest"
+    }
+
+    try:
+        # Use FastRTC's internal offer handling
+        response = await stream.offer(
+            sdp,
+            "offer",
+            extra_data={
+                "src_language": src_language,
+                "target_language": target_language,
+                "voice": voice
+            }
+        )
+
+        # Return SDP answer per WHIP spec
+        return StreamingResponse(
+            content=response["sdp"],
+            media_type="application/sdp",
+            status_code=201,
+            headers={
+                "Location": f"/whip/{session_id}",
+                "ETag": f'"{session_id}"',
+                "Accept-Patch": "application/trickle-ice-sdpfrag"
+            }
+        )
+    except Exception as e:
+        print(f"WHIP error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/whip/{session_id}")
+async def whip_terminate(session_id: str, _auth: bool = Depends(optional_auth)):
+    """Terminate a WHIP session."""
+    if session_id in whip_sessions:
+        del whip_sessions[session_id]
+        return JSONResponse({"status": "terminated"}, status_code=200)
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.patch("/whip/{session_id}")
+async def whip_ice_trickle(session_id: str, request: Request, _auth: bool = Depends(optional_auth)):
+    """Handle ICE trickle for WHIP session."""
+    if session_id not in whip_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # For now, acknowledge the ICE candidate
+    # Full implementation would forward to WebRTC peer connection
+    return JSONResponse({"status": "accepted"}, status_code=204)
+
+
+# WHEP endpoint for external WebRTC consumption
+@app.post("/whep")
+async def whep_consume(
+    request: Request,
+    session_id: str = None,
+    _auth: bool = Depends(optional_auth)
+):
+    """
+    WHEP (WebRTC-HTTP Egress Protocol) endpoint for stream consumption.
+
+    This allows external players to receive translated WebRTC streams.
+
+    Query params:
+        session_id: Optional specific session to consume (default: first available)
+    """
+    body = await request.body()
+    content_type = request.headers.get("Content-Type", "")
+
+    if "application/sdp" in content_type:
+        sdp = body.decode("utf-8")
+    else:
+        try:
+            data = json.loads(body)
+            sdp = data.get("sdp", body.decode("utf-8"))
+        except json.JSONDecodeError:
+            sdp = body.decode("utf-8")
+
+    consumer_id = secrets.token_hex(16)
+
+    try:
+        # Create answer for consumer
+        response = await stream.offer(sdp, "offer")
+
+        return StreamingResponse(
+            content=response["sdp"],
+            media_type="application/sdp",
+            status_code=201,
+            headers={
+                "Location": f"/whep/{consumer_id}",
+                "ETag": f'"{consumer_id}"'
+            }
+        )
+    except Exception as e:
+        print(f"WHEP error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/sessions")
 async def list_sessions():
     """List active translation sessions for control room monitoring."""
+    all_sessions = {**active_sessions, **whip_sessions}
     return JSONResponse({
         "sessions": [
             {
@@ -516,9 +746,10 @@ async def list_sessions():
                 "src_language": data["src_language"],
                 "target_language": data["target_language"],
                 "voice": data["voice"],
-                "uptime": time.time() - data["created_at"]
+                "uptime": time.time() - data["created_at"],
+                "type": data.get("type", "webrtc")
             }
-            for sid, data in active_sessions.items()
+            for sid, data in all_sessions.items()
         ]
     })
 
@@ -540,7 +771,7 @@ async def api_status():
 
 
 @app.get("/monitor")
-async def monitor_page():
+async def monitor_page(request: Request, _auth: bool = Depends(optional_auth)):
     """Simplified monitor-only view for control room displays."""
     rtc_config = await get_cloudflare_turn_credentials_async() if get_space() else None
     html_content = (cur_dir / "monitor.html").read_text() if (cur_dir / "monitor.html").exists() else (cur_dir / "index.html").read_text()
@@ -663,11 +894,20 @@ async def broadcast_info():
             "control_room_ui": f"{base_url}/",
             "monitor_only": f"{base_url}/monitor?autostart=1",
             "webrtc_offer": f"{base_url}/webrtc/offer",
+            "whip_ingest": f"{base_url}/whip?src_language=Spanish&target_language=English",
+            "whep_consume": f"{base_url}/whep",
             "transcript_sse": f"{base_url}/outputs?webrtc_id=SESSION_ID",
             "audio_pcm": f"{base_url}/audio/stream/SESSION_ID",
             "audio_wav": f"{base_url}/audio/wav/SESSION_ID",
             "api_status": f"{base_url}/api/status",
             "api_sessions": f"{base_url}/api/sessions"
+        },
+        "whip_whep": {
+            "description": "Standard WebRTC ingestion/egress protocols for professional broadcast",
+            "whip_enabled": WHIP_ENABLED,
+            "whip_post": "POST /whip with SDP offer (Content-Type: application/sdp)",
+            "whip_params": "?src_language=Spanish&target_language=English&voice=Cherry",
+            "whep_post": "POST /whep with SDP offer to consume translated stream"
         },
         "audio_format": {
             "encoding": "PCM16 signed little-endian",
@@ -680,7 +920,13 @@ async def broadcast_info():
             "ffmpeg_to_srt": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID -c:a aac -f mpegts 'srt://dest:port'",
             "ffmpeg_to_rtmp": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID -c:a aac -f flv rtmp://dest/live/stream",
             "obs_browser": "Add Browser Source with URL: http://host/monitor?autostart=1",
-            "vlc": "vlc http://host/audio/wav/SESSION_ID"
+            "vlc": "vlc http://host/audio/wav/SESSION_ID",
+            "gstreamer_whip": "gst-launch-1.0 ... ! webrtcsink signaller::uri=http://host/whip"
+        },
+        "authentication": {
+            "enabled": AUTH_ENABLED,
+            "type": "HTTP Basic Auth",
+            "header": "Authorization: Basic <base64(username:password)>"
         },
         "latency": {
             "typical": "200-500ms end-to-end",
@@ -690,7 +936,8 @@ async def broadcast_info():
 
 
 @app.get("/")
-async def _():
+async def root_page(request: Request, _auth: bool = Depends(optional_auth)):
+    """Main control room UI - requires authentication if enabled."""
     rtc_config = await get_cloudflare_turn_credentials_async() if get_space() else None
     html_content = (cur_dir / "index.html").read_text()
     html_content = html_content.replace("__RTC_CONFIGURATION__", json.dumps(rtc_config))

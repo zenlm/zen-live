@@ -382,6 +382,62 @@
             display: none;
         }
 
+        /* Broadcast settings panel */
+        .broadcast-settings {
+            margin-top: 16px;
+            border: 1px solid var(--accent);
+            border-radius: 6px;
+        }
+
+        .settings-header {
+            padding: 12px;
+            background: var(--bg-dark);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-radius: 6px;
+        }
+
+        .settings-header:hover {
+            background: var(--accent);
+        }
+
+        .settings-panel {
+            padding: 16px;
+            background: var(--bg-dark);
+            border-top: 1px solid var(--accent);
+            border-radius: 0 0 6px 6px;
+        }
+
+        .settings-panel .control-group {
+            margin-bottom: 12px;
+        }
+
+        .settings-panel label input[type="checkbox"] {
+            margin-right: 8px;
+        }
+
+        .help-text {
+            display: block;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .settings-info {
+            text-align: center;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--accent);
+            color: var(--text-muted);
+        }
+
         /* Responsive */
         @media (max-width: 1024px) {
             .main-container {
@@ -485,13 +541,63 @@
                     <input type="text" id="srtUrl" placeholder="srt://ip:port?streamid=...">
                 </div>
 
-                <div class="btn-group">
+                <div class="btn-group" style="margin-bottom: 16px;">
                     <button class="btn btn-primary" id="startBtn" onclick="startStream()">
                         Start
                     </button>
                     <button class="btn btn-stop" id="stopBtn" onclick="stopStream()" disabled>
                         Stop
                     </button>
+                </div>
+
+                <!-- Broadcast Output Settings (collapsible) -->
+                <div class="broadcast-settings">
+                    <div class="settings-header" onclick="toggleBroadcastSettings()">
+                        <span>Broadcast Output Settings</span>
+                        <span id="settingsArrow">▼</span>
+                    </div>
+                    <div id="broadcastSettingsPanel" class="settings-panel" style="display: none;">
+                        <div class="control-group">
+                            <label>SRT Output URL</label>
+                            <input type="text" id="srtOutputUrl" placeholder="srt://destination:9000?mode=caller">
+                            <small class="help-text">For ffmpeg relay to SRT destination</small>
+                        </div>
+
+                        <div class="control-group">
+                            <label>RTMP Output URL</label>
+                            <input type="text" id="rtmpOutputUrl" placeholder="rtmp://server/live/stream_key">
+                            <small class="help-text">For ffmpeg relay to RTMP server</small>
+                        </div>
+
+                        <div class="control-group">
+                            <label>NDI Output Name</label>
+                            <input type="text" id="ndiOutputName" placeholder="ZEN-LIVE-TRANSLATED">
+                            <small class="help-text">NDI source name for video walls</small>
+                        </div>
+
+                        <div class="control-group">
+                            <label>
+                                <input type="checkbox" id="autoReconnect" checked>
+                                Auto-reconnect on disconnect
+                            </label>
+                        </div>
+
+                        <div class="control-group">
+                            <label>
+                                <input type="checkbox" id="enableTranscriptOverlay">
+                                Burn-in transcript overlay
+                            </label>
+                        </div>
+
+                        <div class="btn-group">
+                            <button class="btn btn-secondary" onclick="saveSettings()">Save Settings</button>
+                            <button class="btn btn-secondary" onclick="clearSettings()">Clear</button>
+                        </div>
+
+                        <div class="settings-info">
+                            <small>Settings are saved to browser localStorage</small>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -865,6 +971,145 @@
                 document.body.classList.toggle('monitor-mode');
             }
         });
+
+        // ==========================================
+        // Broadcast Settings - localStorage
+        // ==========================================
+
+        const STORAGE_KEY = 'zenLiveBroadcastSettings';
+
+        // Toggle settings panel
+        window.toggleBroadcastSettings = function() {
+            const panel = document.getElementById('broadcastSettingsPanel');
+            const arrow = document.getElementById('settingsArrow');
+            if (panel.style.display === 'none') {
+                panel.style.display = 'block';
+                arrow.textContent = '▲';
+            } else {
+                panel.style.display = 'none';
+                arrow.textContent = '▼';
+            }
+        };
+
+        // Save all settings to localStorage
+        window.saveSettings = function() {
+            const settings = {
+                // Main stream settings
+                srcLanguage: document.getElementById('srcLanguage').value,
+                targetLanguage: document.getElementById('targetLanguage').value,
+                voice: document.getElementById('voiceSelect').value,
+                inputSource: document.getElementById('inputSource').value,
+                srtInputUrl: document.getElementById('srtUrl').value,
+                // Broadcast output settings
+                srtOutputUrl: document.getElementById('srtOutputUrl').value,
+                rtmpOutputUrl: document.getElementById('rtmpOutputUrl').value,
+                ndiOutputName: document.getElementById('ndiOutputName').value,
+                autoReconnect: document.getElementById('autoReconnect').checked,
+                enableTranscriptOverlay: document.getElementById('enableTranscriptOverlay').checked,
+                // Metadata
+                savedAt: new Date().toISOString()
+            };
+
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+                showNotification('Settings saved to browser');
+            } catch (e) {
+                console.error('Failed to save settings:', e);
+                alert('Failed to save settings: ' + e.message);
+            }
+        };
+
+        // Load settings from localStorage
+        function loadSettings() {
+            try {
+                const stored = localStorage.getItem(STORAGE_KEY);
+                if (!stored) return;
+
+                const settings = JSON.parse(stored);
+
+                // Main stream settings
+                if (settings.srcLanguage) document.getElementById('srcLanguage').value = settings.srcLanguage;
+                if (settings.targetLanguage) document.getElementById('targetLanguage').value = settings.targetLanguage;
+                if (settings.voice) document.getElementById('voiceSelect').value = settings.voice;
+                if (settings.inputSource) {
+                    document.getElementById('inputSource').value = settings.inputSource;
+                    srtInputGroup.style.display = settings.inputSource === 'srt' ? 'block' : 'none';
+                }
+                if (settings.srtInputUrl) document.getElementById('srtUrl').value = settings.srtInputUrl;
+
+                // Broadcast output settings
+                if (settings.srtOutputUrl) document.getElementById('srtOutputUrl').value = settings.srtOutputUrl;
+                if (settings.rtmpOutputUrl) document.getElementById('rtmpOutputUrl').value = settings.rtmpOutputUrl;
+                if (settings.ndiOutputName) document.getElementById('ndiOutputName').value = settings.ndiOutputName;
+                if (typeof settings.autoReconnect === 'boolean') document.getElementById('autoReconnect').checked = settings.autoReconnect;
+                if (typeof settings.enableTranscriptOverlay === 'boolean') document.getElementById('enableTranscriptOverlay').checked = settings.enableTranscriptOverlay;
+
+                console.log('Settings loaded from localStorage (saved:', settings.savedAt, ')');
+            } catch (e) {
+                console.error('Failed to load settings:', e);
+            }
+        }
+
+        // Clear all settings
+        window.clearSettings = function() {
+            if (confirm('Clear all saved broadcast settings?')) {
+                localStorage.removeItem(STORAGE_KEY);
+                // Reset form fields
+                document.getElementById('srtOutputUrl').value = '';
+                document.getElementById('rtmpOutputUrl').value = '';
+                document.getElementById('ndiOutputName').value = '';
+                document.getElementById('autoReconnect').checked = true;
+                document.getElementById('enableTranscriptOverlay').checked = false;
+                showNotification('Settings cleared');
+            }
+        };
+
+        // Get broadcast settings for external use
+        window.getBroadcastSettings = function() {
+            return {
+                srtOutputUrl: document.getElementById('srtOutputUrl').value,
+                rtmpOutputUrl: document.getElementById('rtmpOutputUrl').value,
+                ndiOutputName: document.getElementById('ndiOutputName').value,
+                autoReconnect: document.getElementById('autoReconnect').checked,
+                enableTranscriptOverlay: document.getElementById('enableTranscriptOverlay').checked
+            };
+        };
+
+        // Simple notification function
+        function showNotification(message) {
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                bottom: 80px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: var(--success);
+                color: white;
+                padding: 12px 24px;
+                border-radius: 6px;
+                font-weight: 600;
+                z-index: 10000;
+                animation: fadeInOut 2s ease-in-out;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 2000);
+        }
+
+        // Add fadeInOut animation
+        const styleSheet = document.createElement('style');
+        styleSheet.textContent = `
+            @keyframes fadeInOut {
+                0% { opacity: 0; transform: translateX(-50%) translateY(20px); }
+                20% { opacity: 1; transform: translateX(-50%) translateY(0); }
+                80% { opacity: 1; transform: translateX(-50%) translateY(0); }
+                100% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+            }
+        `;
+        document.head.appendChild(styleSheet);
+
+        // Load settings on page load
+        loadSettings();
     </script>
 </body>
 </html>
