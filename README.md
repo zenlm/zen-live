@@ -1,3 +1,16 @@
+---
+title: Zen Live
+emoji: 🎙️
+colorFrom: purple
+colorTo: red
+sdk: gradio
+sdk_version: 5.0.0
+app_file: app.py
+pinned: false
+license: apache-2.0
+short_description: Real-time speech translation for broadcast news
+---
+
 # Zen Live
 
 Real-time speech translation for broadcast news monitoring. Powered by [Hanzo AI](https://hanzo.ai).
@@ -48,10 +61,24 @@ Open http://localhost:8000 in your browser.
 | `/api/status` | Service health check |
 | `/api/sessions` | Active session list |
 | `/broadcast/info` | Integration guide for engineers |
-| `/docs` | OpenAPI documentation |
+| `/docs` | **OpenAPI (Swagger) documentation** |
+| `/redoc` | ReDoc API documentation |
+| `/openapi.json` | OpenAPI JSON spec for code generation |
+| `/whip` | WHIP endpoint for broadcaster ingestion |
+| `/whep` | WHEP endpoint for WebRTC consumption |
 | `/outputs?webrtc_id=ID` | SSE transcript stream |
 | `/audio/stream/ID` | Raw PCM16 audio (24kHz) |
 | `/audio/wav/ID` | WAV-wrapped audio stream |
+
+## API Documentation
+
+Full OpenAPI/Swagger documentation is available at `/docs` when the server is running.
+
+- **Interactive Docs:** `http://your-server:8000/docs`
+- **ReDoc:** `http://your-server:8000/redoc`
+- **OpenAPI JSON:** `http://your-server:8000/openapi.json`
+
+Use the OpenAPI spec to generate client SDKs in any language.
 
 ## Backend Options
 
@@ -136,8 +163,20 @@ English, Chinese, Russian, French, German, Portuguese, Spanish, Italian, Korean,
 | `HANZO_NODE_URL` | Hanzo Node backend URL | - |
 | `API_KEY` | DashScope API key (fallback) | - |
 | `ZEN_OMNI_PATH` | Local model path | - |
+| `ZEN_LIVE_USER` | HTTP Basic Auth username (optional) | - |
+| `ZEN_LIVE_PASS` | HTTP Basic Auth password (optional) | - |
+| `WHIP_ENABLED` | Enable WHIP ingestion endpoint | `true` |
 | `PORT` | Server port | 8000 |
 | `MODE` | `UI` for Gradio, `PHONE` for FastPhone | - |
+
+## Authentication
+
+When both `ZEN_LIVE_USER` and `ZEN_LIVE_PASS` are set, HTTP Basic Authentication is required for the control room UI and monitor pages. API endpoints remain accessible for integration.
+
+```bash
+export ZEN_LIVE_USER=operator@news.com
+export ZEN_LIVE_PASS=your_secure_password
+```
 
 ## Architecture
 

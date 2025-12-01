@@ -503,10 +503,44 @@ def enhance_ui():
 
 app = FastAPI(
     title="Zen Live",
-    description="Real-time speech translation for broadcast news monitoring. Powered by Hanzo AI.",
+    description="""
+# Zen Live - Real-time Speech Translation API
+
+Low-latency simultaneous translation service for broadcast news monitoring.
+
+## Features
+- **WebRTC streaming** - Browser-based real-time translation
+- **WHIP/WHEP** - Standard broadcast ingestion/egress protocols
+- **Audio streaming** - PCM/WAV endpoints for broadcast integration
+- **SSE transcripts** - Real-time transcript streaming
+
+## Quick Start
+1. Open the [Control Room UI](/) in your browser
+2. Select source language (default: Spanish)
+3. Select target language (default: English)
+4. Click Start to begin translation
+
+## Authentication
+When `ZEN_LIVE_USER` and `ZEN_LIVE_PASS` env vars are set, HTTP Basic Auth is required.
+
+## Broadcast Integration
+See [/broadcast/info](/broadcast/info) for ffmpeg, SRT, RTMP, and NDI integration examples.
+
+Powered by [Hanzo AI](https://hanzo.ai) | [GitHub](https://github.com/zenlm/zen-live)
+    """,
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    license_info={
+        "name": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    contact={
+        "name": "Zen Live Support",
+        "url": "https://github.com/zenlm/zen-live",
+        "email": "support@hanzo.ai"
+    }
 )
 
 # CORS for control room access from different domains
