@@ -1632,7 +1632,7 @@
 
                         const source = audioContext.createBufferSource();
                         source.buffer = buffer;
-                        source.connect(translatedGain);
+                        source.connect(translatedGainNode || audioContext.destination);
                         source.start();
 
                         console.log('🔊 Playing audio chunk:', float32Data.length, 'samples');
