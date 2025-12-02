@@ -43,7 +43,7 @@ pip install -r requirements.txt
 # Configure backend (choose one):
 export HANZO_NODE_URL=http://localhost:9550   # Recommended: Hanzo Node
 # or
-export API_KEY=your_dashscope_api_key         # Direct DashScope API
+export API_KEY=your_hanzo_api_key         # Direct Hanzo API
 
 # Run
 python app.py
@@ -90,12 +90,12 @@ Connect to a [Hanzo Node](https://github.com/hanzoai/hanzo-node) instance for ma
 export HANZO_NODE_URL=http://your-hanzo-node:9550
 ```
 
-### 2. Direct DashScope API
+### 2. Direct Hanzo API
 
-Use DashScope Qwen3 LiveTranslate directly (requires API key).
+Use Hanzo Zen Live API directly (requires API key).
 
 ```bash
-export API_KEY=your_dashscope_key
+export API_KEY=your_hanzo_key
 ```
 
 ### 3. Local Zen Omni Model (Coming Soon)
@@ -161,7 +161,7 @@ English, Chinese, Russian, French, German, Portuguese, Spanish, Italian, Korean,
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `HANZO_NODE_URL` | Hanzo Node backend URL | - |
-| `API_KEY` | DashScope API key (fallback) | - |
+| `API_KEY` | Hanzo API key (fallback) | - |
 | `ZEN_OMNI_PATH` | Local model path | - |
 | `ZEN_LIVE_USER` | HTTP Basic Auth username (optional) | - |
 | `ZEN_LIVE_PASS` | HTTP Basic Auth password (optional) | - |
@@ -188,22 +188,22 @@ export ZEN_LIVE_PASS=your_secure_password
                                                │
                                     ┌──────────┴──────────┐
                                     │                     │
-                              ┌─────▼─────┐        ┌──────▼──────┐
-                              │  Hanzo    │        │  DashScope  │
-                              │   Node    │        │   Direct    │
-                              └───────────┘        └─────────────┘
+                              ┌─────▼─────┐        ┌──────▼─────┐
+                              │   Hanzo   │        │    Hanzo   │
+                              │   Node    │        │    API     │
+                              └───────────┘        └────────────┘
                                     │                     │
                                     └──────────┬──────────┘
                                                │
-                                    ┌──────────▼──────────┐
-                                    │  Qwen3 LiveTranslate │
-                                    │     (Backend)        │
-                                    └─────────────────────┘
+                                    ┌──────────▼────────────┐
+                                    │  Zen Omni + Zen Live  │
+                                    │     (Backend)         │
+                                    └───────────────────────┘
 ```
 
 ## Related Projects
 
-- [Hanzo Node](https://github.com/hanzoai/hanzo-node) - AI infrastructure node
+- [Hanzo Node](https://github.com/hanzoai/node) - AI infrastructure node
 - [Zen AI Models](https://github.com/zenlm/zen) - Zen model family
 - [Zen Omni](https://huggingface.co/zenlm/zen-omni) - Multimodal model
 
