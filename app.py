@@ -143,6 +143,36 @@ def optional_auth(request: Request):
     return True
 
 
+async def verify_websocket_auth(websocket: WebSocket) -> bool:
+    """Verify WebSocket authentication via query param or header."""
+    if not AUTH_ENABLED:
+        return True
+
+    # Check for auth in query params (for WebSocket clients that can't set headers)
+    token = websocket.query_params.get("token")
+    if token:
+        try:
+            credentials = base64.b64decode(token).decode("utf-8")
+            username, password = credentials.split(":", 1)
+            if secrets.compare_digest(username, AUTH_USER) and secrets.compare_digest(password, AUTH_PASS):
+                return True
+        except Exception:
+            pass
+
+    # Check for Authorization header
+    auth_header = websocket.headers.get("authorization")
+    if auth_header and auth_header.startswith("Basic "):
+        try:
+            credentials = base64.b64decode(auth_header[6:]).decode("utf-8")
+            username, password = credentials.split(":", 1)
+            if secrets.compare_digest(username, AUTH_USER) and secrets.compare_digest(password, AUTH_PASS):
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
 VOICES = ["Cherry", "Nofish", "Jada", "Dylan", "Sunny", "Peter", "Kiki", "Eric"]
 
 ssl_context = ssl.create_default_context(cafile=certifi.where())
@@ -181,6 +211,11 @@ LANG_MAP = {
     "tr": "Turkish"
 }
 LANG_MAP_REVERSE = {v: k for k, v in LANG_MAP.items()}
+
+# Handler registry to track session_id -> handler mapping for concurrent users
+handler_registry = {}  # session_id -> LiveTranslateHandler
+# Pending session ID to be assigned to the next handler that starts
+pending_session_id = None
 # SRC_LANGUAGES = ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar", "hi", "el", "tr"]  # 使用相同的语言列表
 # TARGET_LANGUAGES = ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar"]
 
@@ -190,7 +225,7 @@ TARGET_LANGUAGES = [LANG_MAP[code] for code in ["en", "zh", "ru", "fr", "de", "p
 
 
 class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
-    def __init__(self, session_config: dict = None) -> None:
+    def __init__(self, session_config: dict = None, session_id: str = None) -> None:
         print("🔧 LiveTranslateHandler.__init__() called")
         super().__init__(
             expected_layout="mono",
@@ -212,19 +247,31 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         self.source_text = ""
         self.source_temp = ""
 
+        # Session ID for tracking and audio routing
+        self.session_id = session_id
+
         # Session-specific config (avoids race conditions with concurrent users)
         self.session_config = session_config or {
             "src_language": "Spanish",
             "target_language": "English",
             "voice": "Nofish"
         }
-        print(f"🔧 LiveTranslateHandler.__init__() complete, config: {self.session_config}")
+        print(f"🔧 LiveTranslateHandler.__init__() complete, session_id: {session_id}, config: {self.session_config}")
 
 
     def copy(self):
-        print("🔧 LiveTranslateHandler.copy() called - creating new handler instance")
-        # Pass session config to the new handler instance
-        return LiveTranslateHandler(session_config=self.session_config.copy() if self.session_config else None)
+        global pending_session_id
+        print(f"🔧 LiveTranslateHandler.copy() called - creating new handler instance, pending_session_id: {pending_session_id}")
+        # Pass session config and pending session_id to the new handler instance
+        new_handler = LiveTranslateHandler(
+            session_config=self.session_config.copy() if self.session_config else None,
+            session_id=pending_session_id
+        )
+        # Register handler if we have a session_id
+        if pending_session_id:
+            handler_registry[pending_session_id] = new_handler
+            pending_session_id = None  # Clear pending
+        return new_handler
 
     @staticmethod
     def msg_id() -> str:
@@ -359,6 +406,9 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                             await self.output_queue.put(
                                 (self.output_sample_rate, audio_array)
                             )
+                            # Publish to HTTP audio stream subscribers for broadcast output
+                            # Uses session_id for proper routing to concurrent sessions
+                            await publish_audio_to_subscribers(audio_data, self.session_id)
 
 
         except Exception as e:
@@ -668,6 +718,13 @@ app.add_middleware(
 stream.mount(app)
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Start background cleanup task on startup."""
+    asyncio.create_task(cleanup_stale_sessions())
+    print("🚀 Started session cleanup background task")
+
+
 # WebRTC offer model
 class WebRTCOffer(BaseModel):
     sdp: str
@@ -683,6 +740,33 @@ active_sessions = {}
 session_configs = {}
 # Current session config for single-instance mode (fallback)
 current_session_config = {"src_language": "Spanish", "target_language": "English", "voice": "Nofish"}
+# Session timeout in seconds (cleanup after 1 hour of inactivity)
+SESSION_TIMEOUT = 3600
+
+
+async def cleanup_stale_sessions():
+    """Background task to cleanup stale sessions and prevent memory leak."""
+    while True:
+        await asyncio.sleep(300)  # Run every 5 minutes
+        current_time = time.time()
+        stale_sessions = []
+
+        # Find stale active_sessions
+        for session_id, session_data in list(active_sessions.items()):
+            created_at = session_data.get("created_at", 0)
+            if current_time - created_at > SESSION_TIMEOUT:
+                stale_sessions.append(session_id)
+
+        # Remove stale sessions
+        for session_id in stale_sessions:
+            active_sessions.pop(session_id, None)
+            session_configs.pop(session_id, None)
+            handler_registry.pop(session_id, None)  # Also cleanup handler registry
+            audio_subscribers.pop(session_id, None)  # Cleanup audio subscribers
+            print(f"🧹 Cleaned up stale session: {session_id[:8]}...")
+
+        if stale_sessions:
+            print(f"🧹 Cleaned up {len(stale_sessions)} stale session(s)")
 
 
 @app.post("/api/webrtc/offer")
@@ -713,8 +797,10 @@ async def webrtc_offer(offer: WebRTCOffer):
         session_configs[session_id] = session_config.copy()
 
         # Also update global fallback for single-user mode
-        global current_session_config
+        global current_session_config, pending_session_id
         current_session_config = session_config.copy()
+        # Set pending session_id so handler.copy() can pick it up
+        pending_session_id = session_id
 
         print(f"📡 WebRTC offer received: {offer.src_language} -> {offer.target_language}, voice: {offer.voice}")
 
@@ -975,9 +1061,8 @@ async def api_status():
             "enabled": AUTH_ENABLED,
             "type": "HTTP Basic Auth" if AUTH_ENABLED else "None",
             "header": "Authorization: Basic <base64(username:password)>" if AUTH_ENABLED else None,
-            "example": f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}" if AUTH_ENABLED else None,
-            "curl_example": f"curl -u '{AUTH_USER}:{AUTH_PASS}' {BASE_URL}/api/status" if AUTH_ENABLED else f"curl {BASE_URL}/api/status",
-            "websocket_example": f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime' -H 'Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}'" if AUTH_ENABLED else f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime'"
+            "curl_example": f"curl -u '<username>:<password>' {BASE_URL}/api/status" if AUTH_ENABLED else f"curl {BASE_URL}/api/status",
+            "websocket_example": f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime' -H 'Authorization: Basic <base64>'" if AUTH_ENABLED else f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime'"
         },
         "supported_languages": {
             "source": SRC_LANGUAGES,
@@ -998,6 +1083,26 @@ async def monitor_page(request: Request, _auth: bool = Depends(optional_auth)):
 
 # Audio streaming for broadcast integration (can be ingested via NDI/SDI converters)
 audio_subscribers = {}  # webrtc_id -> list of asyncio.Queue
+# Global audio publisher for broadcast - publishes to all subscribers
+all_audio_subscribers = []  # list of asyncio.Queue for /audio/broadcast
+
+
+async def publish_audio_to_subscribers(audio_data: bytes, webrtc_id: str = None):
+    """Publish translated audio to HTTP stream subscribers."""
+    # Publish to specific session subscribers
+    if webrtc_id and webrtc_id in audio_subscribers:
+        for queue in audio_subscribers[webrtc_id]:
+            try:
+                queue.put_nowait(audio_data)
+            except asyncio.QueueFull:
+                pass  # Drop if queue is full
+
+    # Also publish to broadcast subscribers (any session)
+    for queue in all_audio_subscribers:
+        try:
+            queue.put_nowait(audio_data)
+        except asyncio.QueueFull:
+            pass  # Drop if queue is full
 
 
 @app.get("/audio/stream/{webrtc_id}")
@@ -1099,6 +1204,44 @@ async def audio_wav_stream(webrtc_id: str):
     )
 
 
+@app.get("/audio/broadcast")
+async def audio_broadcast_stream():
+    """
+    Broadcast audio stream - receives translated audio from any active session.
+
+    This endpoint is useful for NDI/SRT/RTMP output where you want to capture
+    translated audio regardless of the specific session ID.
+
+    Usage:
+        ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/broadcast -c:a aac -f mpegts srt://dest:port
+    """
+    async def generate_audio():
+        queue = asyncio.Queue(maxsize=100)  # Buffer up to 100 chunks
+        all_audio_subscribers.append(queue)
+
+        try:
+            while True:
+                try:
+                    audio_data = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield audio_data
+                except asyncio.TimeoutError:
+                    # Send silence to keep connection alive
+                    yield b'\x00' * 4800  # 100ms of silence at 24kHz
+        finally:
+            all_audio_subscribers.remove(queue)
+
+    return StreamingResponse(
+        generate_audio(),
+        media_type="audio/pcm",
+        headers={
+            "Content-Type": "audio/L16;rate=24000;channels=1",
+            "Cache-Control": "no-cache",
+            "X-Audio-Format": "PCM16 24kHz Mono",
+            "Access-Control-Allow-Origin": "*"
+        }
+    )
+
+
 @app.get("/broadcast/info")
 async def broadcast_info():
     """
@@ -1115,6 +1258,7 @@ async def broadcast_info():
             "transcript_sse": f"{BASE_URL}/outputs?webrtc_id={{SESSION_ID}}",
             "audio_pcm": f"{BASE_URL}/audio/stream/{{SESSION_ID}}",
             "audio_wav": f"{BASE_URL}/audio/wav/{{SESSION_ID}}",
+            "audio_broadcast": f"{BASE_URL}/audio/broadcast",
             "api_status": f"{BASE_URL}/api/status",
             "api_sessions": f"{BASE_URL}/api/sessions"
         },
@@ -1133,8 +1277,10 @@ async def broadcast_info():
         },
         "integration_examples": {
             "ffplay_direct": "ffplay -f s16le -ar 24000 -ac 1 http://host/audio/stream/ID",
-            "ffmpeg_to_srt": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID -c:a aac -f mpegts 'srt://dest:port'",
-            "ffmpeg_to_rtmp": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID -c:a aac -f flv rtmp://dest/live/stream",
+            "ffplay_broadcast": "ffplay -f s16le -ar 24000 -ac 1 http://host/audio/broadcast",
+            "ffmpeg_to_srt": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/broadcast -c:a aac -f mpegts 'srt://dest:port'",
+            "ffmpeg_to_rtmp": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/broadcast -c:a aac -f flv rtmp://dest/live/stream",
+            "ffmpeg_to_ndi": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/broadcast -f libndi_newtek -clock_video true 'ZEN-LIVE-TRANSLATED'",
             "obs_browser": "Add Browser Source with URL: http://host/monitor?autostart=1",
             "vlc": "vlc http://host/audio/wav/SESSION_ID",
             "gstreamer_whip": "gst-launch-1.0 ... ! webrtcsink signaller::uri=http://host/whip"
@@ -1256,6 +1402,11 @@ async def websocket_proxy(websocket: WebSocket):
     """
     if not HANZO_API_KEY:
         await websocket.close(code=4001, reason="HANZO_API_KEY not configured")
+        return
+
+    # Verify authentication before accepting
+    if not await verify_websocket_auth(websocket):
+        await websocket.close(code=4003, reason="Authentication required")
         return
 
     await websocket.accept()
@@ -1450,6 +1601,11 @@ async def asr_websocket_proxy(websocket: WebSocket):
     """
     if not HANZO_API_KEY:
         await websocket.close(code=4001, reason="HANZO_API_KEY not configured")
+        return
+
+    # Verify authentication before accepting
+    if not await verify_websocket_auth(websocket):
+        await websocket.close(code=4003, reason="Authentication required")
         return
 
     await websocket.accept()

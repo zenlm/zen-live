@@ -1127,6 +1127,28 @@
                         video: { width: 1920, height: 1080 },
                         audio: true
                     });
+                } else if (sourceType === 'srt') {
+                    // For SRT input, audio comes from server side (WHIP/SRT feed)
+                    // We still need a mic for monitoring or pass-through, but video comes from server
+                    try {
+                        // Get audio-only stream from mic for monitoring
+                        mediaStream = await navigator.mediaDevices.getUserMedia({
+                            video: false,
+                            audio: audioConstraints
+                        });
+                        console.log('🎤 SRT mode: Audio captured from mic for monitoring');
+                    } catch (e) {
+                        console.warn('🎤 Could not get mic audio, proceeding without local audio:', e);
+                        // Create an empty MediaStream for SRT mode when no mic available
+                        mediaStream = new MediaStream();
+                    }
+                } else {
+                    // Unknown source type - fall back to camera
+                    console.warn('Unknown source type:', sourceType, '- falling back to camera');
+                    mediaStream = await navigator.mediaDevices.getUserMedia({
+                        video: { width: 1280, height: 720 },
+                        audio: audioConstraints
+                    });
                 }
 
                 // Set output device if supported
@@ -1173,10 +1195,14 @@
             };
             dataChannel.onerror = (e) => console.error('📡 Data channel error:', e);
 
-            // Add tracks
-            mediaStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, mediaStream);
-            });
+            // Add tracks (if we have any - SRT mode may have empty stream)
+            if (mediaStream && mediaStream.getTracks().length > 0) {
+                mediaStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, mediaStream);
+                });
+            } else {
+                console.log('📡 No local tracks to add (SRT/server-side input mode)');
+            }
 
             // Handle incoming audio (translated TTS)
             peerConnection.ontrack = (event) => {
@@ -1506,9 +1532,13 @@
                     }
                 };
 
-                // Connect audio nodes
+                // Connect audio nodes - DO NOT connect to destination to prevent echo
                 asrSourceNode.connect(asrAudioProcessor);
-                asrAudioProcessor.connect(asrAudioContext.destination);
+                // Create a silent gain node to prevent echo through speakers
+                const silentGain = asrAudioContext.createGain();
+                silentGain.gain.value = 0;
+                asrAudioProcessor.connect(silentGain);
+                silentGain.connect(asrAudioContext.destination);
 
                 console.log('🎙️ ASR audio capture started');
 
@@ -1608,34 +1638,11 @@
 
             switch(type) {
                 case 'response.audio.delta':
-                    // Translated audio chunk (base64 PCM)
-                    if (msg.delta && audioContext) {
-                        const audioData = atob(msg.delta);
-                        const pcmData = new Int16Array(audioData.length / 2);
-
-                        // Convert byte string to Int16Array
-                        for (let i = 0; i < pcmData.length; i++) {
-                            const byte1 = audioData.charCodeAt(i * 2);
-                            const byte2 = audioData.charCodeAt(i * 2 + 1);
-                            pcmData[i] = (byte2 << 8) | byte1;
-                        }
-
-                        // Convert PCM16 to Float32 for Web Audio API
-                        const float32Data = new Float32Array(pcmData.length);
-                        for (let i = 0; i < pcmData.length; i++) {
-                            float32Data[i] = pcmData[i] / 32768.0;
-                        }
-
-                        // Create audio buffer and play
-                        const buffer = audioContext.createBuffer(1, float32Data.length, 24000); // 24kHz
-                        buffer.copyToChannel(float32Data, 0);
-
-                        const source = audioContext.createBufferSource();
-                        source.buffer = buffer;
-                        source.connect(translatedGainNode || audioContext.destination);
-                        source.start();
-
-                        console.log('🔊 Playing audio chunk:', float32Data.length, 'samples');
+                    // Translated audio is handled via WebRTC track, not data channel
+                    // This avoids dual playback causing double audio or silence
+                    // Only log for debugging - do NOT play audio here
+                    if (msg.delta) {
+                        console.log('📡 Audio delta received via data channel (handled by WebRTC track)');
                     }
                     break;
 
