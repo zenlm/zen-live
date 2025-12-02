@@ -18,19 +18,18 @@ Control Room Browser
         ├──► Hanzo Node API (recommended)
         │         │
         │         ▼
-        │    Qwen3 LiveTranslate
+        │    Zen LiveTranslate
         │
-        └──► Direct DashScope API (fallback)
+        └──► Direct Hanzo API (fallback)
                   │
                   ▼
-             Qwen3 LiveTranslate
+             Zen LiveTranslate
 ```
 
 ## Backend Options
 
 1. **Hanzo Node** (recommended): `HANZO_NODE_URL=http://host:3690`
-2. **DashScope Direct**: `API_KEY=xxx`
-3. **Zen Omni Local** (future): `ZEN_OMNI_PATH=/path/to/model`
+2. **Hanzo API**: `API_KEY=xxx`
 
 ## Files
 
@@ -134,7 +133,7 @@ The sidebar contains 6 major functional sections (top to bottom):
 #### 1. **Visual Hierarchy & Clutter**
 - **Issue**: The sidebar feels dense with 6 distinct sections in a 400px width
 - **Severity**: Medium
-- **Evidence**: 
+- **Evidence**:
   - Minimal spacing between sections (only 1px borders)
   - No visual separation besides borders
   - All text is same hierarchy level despite different importance
@@ -256,7 +255,7 @@ Audio Mixer:
   - Start/Stop buttons
   - Transcript log
   - Status display (latency, connection)
-  
+
 **Advanced Mode (Toggle)**
 - All simple mode items +
 - Audio Mixer section (with icon indicating "advanced")

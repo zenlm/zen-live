@@ -19,6 +19,48 @@ Zen Live is a low-latency simultaneous translation service designed for news con
 
 ## Quick Start
 
+### Option 1: Docker Hub (Recommended)
+
+```bash
+# Pull the image from Docker Hub
+docker pull zenlm/zen-live:latest
+
+# Create a .env file with your configuration
+cat > .env << EOF
+# Hanzo API Configuration
+API_KEY=your_hanzo_api_key_here
+HANZO_NODE_URL=https://your-hanzo-node.com
+
+# Authentication (optional)
+ZEN_LIVE_USER=admin
+ZEN_LIVE_PASS=YourSecurePassword
+EOF
+
+# Run with mounted .env file
+docker run -d --name zen-live \
+  -p 8000:8000 \
+  -v $(pwd)/.env:/app/.env:ro \
+  --restart unless-stopped \
+  zenlm/zen-live:latest
+```
+
+### Option 2: Docker Compose
+
+```bash
+# Clone the repository
+git clone https://github.com/zenlm/zen-live.git
+cd zen-live
+
+# Copy and configure .env
+cp .env.example .env
+nano .env  # Edit with your API keys
+
+# Run with Docker Compose
+docker-compose up -d
+```
+
+### Option 3: Manual Installation
+
 ```bash
 # Clone the repository
 git clone https://github.com/zenlm/zen-live.git
@@ -71,7 +113,7 @@ Use the OpenAPI spec to generate client SDKs in any language.
 
 ### 1. Hanzo Node (Recommended)
 
-Connect to a [Hanzo Node](https://github.com/hanzoai/hanzo-node) instance for managed translation infrastructure.
+Connect to a [Hanzo Node](https://github.com/hanzoai/hanzo-node) instance for managed translation infrastructure. Includes support for local Zen Omni models.
 
 ```bash
 export HANZO_NODE_URL=http://your-hanzo-node:3690
@@ -79,18 +121,10 @@ export HANZO_NODE_URL=http://your-hanzo-node:3690
 
 ### 2. Direct Hanzo API
 
-Use Hanzo Zen Live API directly (requires API key).
+Use Hanzo Zen Live API directly from the cloud (requires API key).
 
 ```bash
 export API_KEY=your_hanzo_key
-```
-
-### 3. Local Zen Omni Model (Coming Soon)
-
-Run completely offline with local Zen Omni model.
-
-```bash
-export ZEN_OMNI_PATH=/path/to/zen-omni
 ```
 
 ## Control Room Usage

@@ -743,7 +743,7 @@
             Zen Live
         </div>
         <div class="nav-links">
-            <button class="mode-toggle" id="advancedToggle" onclick="toggleAdvancedMode()" aria-label="Toggle advanced mode" title="Toggle advanced controls (Ctrl+Shift+A)">
+            <button class="mode-toggle" id="advancedToggle" onclick="toggleAdvancedMode()" aria-label="Toggle advanced mode" title="Toggle advanced controls (Ctrl+Shift+A)" style="display:none;">
                 <span class="mode-toggle-icon" id="modeIcon">+</span>
                 <span id="modeLabel">Advanced</span>
             </button>
@@ -756,12 +756,13 @@
                 <div class="status-dot" id="connectionStatus"></div>
                 <span id="connectionText">Disconnected</span>
             </div>
-            <div class="status-item">
+            <div class="status-item" style="display:none;">
                 <div class="status-dot" id="audioStatus"></div>
                 <span>Audio</span>
             </div>
             <div class="status-item">
-                <span id="latencyDisplay">Latency: --ms</span>
+                <span id="latencyDisplay">--ms</span>
+                <span style="color: var(--text-muted); margin-left: 8px;">avg: <span id="headerAvgLatency">--ms</span></span>
             </div>
         </div>
     </div>
@@ -792,8 +793,8 @@
                 <div class="control-group">
                     <label>Source Language</label>
                     <select id="srcLanguage" onchange="onLanguageChange()">
-                        <option value="English" selected>English</option>
-                        <option value="Spanish">Spanish (Espanol)</option>
+                        <option value="Spanish" selected>Spanish (Espanol)</option>
+                        <option value="English">English</option>
                         <option value="Chinese">Chinese (Mandarin)</option>
                         <option value="Portuguese">Portuguese</option>
                         <option value="French">French</option>
@@ -810,8 +811,8 @@
                 <div class="control-group">
                     <label>Target Language</label>
                     <select id="targetLanguage" onchange="onLanguageChange()">
-                        <option value="Spanish" selected>Spanish (Espanol)</option>
-                        <option value="English">English</option>
+                        <option value="English" selected>English</option>
+                        <option value="Spanish">Spanish (Espanol)</option>
                         <option value="Chinese">Chinese (Mandarin)</option>
                         <option value="Portuguese">Portuguese</option>
                         <option value="French">French</option>
@@ -921,7 +922,7 @@
                 <div class="transcript-log" id="transcriptLog"></div>
             </div>
 
-            <div class="audio-monitor">
+            <div class="audio-monitor" style="display:none;">
                 <div class="latency-display" style="margin-top: 0;">
                     <span>Translation latency:</span>
                     <span class="latency-value" id="e2eLatency">--ms</span>
@@ -1004,7 +1005,7 @@
         let translatedMuted = false;
         let audioMode = 'mix'; // 'source', 'mix', or 'translated'
 
-        // DashScope ASR for source language transcription (via backend proxy)
+        // Hanzo ASR for source language transcription (via backend proxy)
         let asrWebSocket = null;
         let asrAudioProcessor = null;
         let asrAudioContext = null;
@@ -1162,7 +1163,14 @@
             // FastRTC's AudioCallback.start() waits for this before calling start_up()
             const dataChannel = peerConnection.createDataChannel('fastrtc');
             dataChannel.onopen = () => console.log('📡 Data channel opened');
-            dataChannel.onmessage = (e) => console.log('📡 Data channel message:', e.data);
+            dataChannel.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    handleDataChannelMessage(msg);
+                } catch (err) {
+                    console.log('📡 Data channel message (non-JSON):', e.data);
+                }
+            };
             dataChannel.onerror = (e) => console.error('📡 Data channel error:', e);
 
             // Add tracks
@@ -1306,6 +1314,10 @@
                     const avg = Math.round(latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length);
                     avgLatencyEl.textContent = `${avg}ms`;
                     avgLatencyEl.className = avg > 500 ? 'latency-value high' : 'latency-value';
+
+                    // Update header avg latency
+                    const headerAvg = document.getElementById('headerAvgLatency');
+                    if (headerAvg) headerAvg.textContent = `${avg}ms`;
                 }
             });
 
@@ -1356,7 +1368,7 @@
 
         // ==========================================
         // Hanzo ASR for Source Language Transcription
-        // Uses qwen3-asr-flash-realtime model
+        // Uses zen-asr-flash-realtime model
         // ==========================================
 
         // Language mapping from our names to Hanzo codes
@@ -1376,24 +1388,38 @@
         };
 
         function startSpeechRecognition() {
-            // Start DashScope ASR using the current mediaStream
-            if (!mediaStream) {
-                console.warn('No media stream available for ASR');
-                return;
+            // Start separate ASR for source language transcription
+            // The main translation API (zen-livetranslate) only outputs translated text
+            // We need zen-asr-flash-realtime for source language captions
+            console.log('🎙️ Starting source language ASR...');
+
+            // Get audio track from the media stream for ASR
+            if (mediaStream) {
+                const audioTrack = mediaStream.getAudioTracks()[0];
+                if (audioTrack) {
+                    const asrStream = new MediaStream([audioTrack]);
+                    startHanzoASR(asrStream);
+                } else {
+                    console.warn('🎙️ No audio track available for ASR');
+                    sourceCaption.querySelector('.text').textContent = '[No audio]';
+                }
+            } else {
+                console.warn('🎙️ No media stream available for ASR');
+                sourceCaption.querySelector('.text').textContent = '[No stream]';
             }
-            startDashScopeASR(mediaStream);
         }
 
-        async function startDashScopeASR(stream) {
-            console.log('🎙️ Starting DashScope ASR...');
+        async function startHanzoASR(stream) {
+            console.log('🎙️ Starting Hanzo ASR...');
 
             // Show listening indicator
             sourceCaption.querySelector('.text').textContent = 'Connecting to ASR...';
             sourceCaption.style.opacity = '1';
 
             try {
-                // Create audio context for capturing PCM
-                asrAudioContext = new AudioContext({ sampleRate: 16000 });
+                // Create audio context - must match the stream's sample rate
+                // We'll resample to 16kHz when sending to the ASR API
+                asrAudioContext = new AudioContext();
                 asrSourceNode = asrAudioContext.createMediaStreamSource(stream);
 
                 // Create script processor for audio capture (4096 samples buffer)
@@ -1409,17 +1435,14 @@
                     const srcLang = document.getElementById('srcLanguage').value;
                     const asrLang = asrLangMap[srcLang] || 'en';
 
-                    // Send session update with ASR config
+                    // Send session update with ASR config for zen-asr-flash-realtime
+                    // Note: This model expects PCM16@16kHz audio by default
                     const sessionUpdate = {
                         type: 'session.update',
                         session: {
-                            model: 'qwen3-asr-flash-realtime',
                             modalities: ['text'],
                             input_audio_transcription: {
-                                model: 'qwen3-asr-flash-realtime',
-                                language: asrLang,
-                                format: 'pcm',
-                                sample_rate: 16000
+                                language: asrLang
                             }
                         }
                     };
@@ -1448,11 +1471,27 @@
                 asrAudioProcessor.onaudioprocess = (event) => {
                     if (asrWebSocket?.readyState === WebSocket.OPEN) {
                         const inputData = event.inputBuffer.getChannelData(0);
+                        const inputSampleRate = asrAudioContext.sampleRate;
+                        const targetSampleRate = 16000;
+
+                        // Resample to 16kHz if needed
+                        let resampledData;
+                        if (inputSampleRate !== targetSampleRate) {
+                            const ratio = inputSampleRate / targetSampleRate;
+                            const newLength = Math.round(inputData.length / ratio);
+                            resampledData = new Float32Array(newLength);
+                            for (let i = 0; i < newLength; i++) {
+                                const srcIndex = Math.floor(i * ratio);
+                                resampledData[i] = inputData[srcIndex];
+                            }
+                        } else {
+                            resampledData = inputData;
+                        }
 
                         // Convert Float32 to Int16 PCM
-                        const pcmData = new Int16Array(inputData.length);
-                        for (let i = 0; i < inputData.length; i++) {
-                            const s = Math.max(-1, Math.min(1, inputData[i]));
+                        const pcmData = new Int16Array(resampledData.length);
+                        for (let i = 0; i < resampledData.length; i++) {
+                            const s = Math.max(-1, Math.min(1, resampledData[i]));
                             pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                         }
 
@@ -1534,7 +1573,7 @@
             }
         }
 
-        function stopDashScopeASR() {
+        function stopHanzoASR() {
             // Close WebSocket connection
             if (asrWebSocket) {
                 asrWebSocket.onclose = null; // Prevent reconnect
@@ -1563,6 +1602,69 @@
             sourceInterimText = '';
         }
 
+        // Handle data channel messages (audio and transcripts from server)
+        function handleDataChannelMessage(msg) {
+            const type = msg.type;
+
+            switch(type) {
+                case 'response.audio.delta':
+                    // Translated audio chunk (base64 PCM)
+                    if (msg.delta && audioContext) {
+                        const audioData = atob(msg.delta);
+                        const pcmData = new Int16Array(audioData.length / 2);
+
+                        // Convert byte string to Int16Array
+                        for (let i = 0; i < pcmData.length; i++) {
+                            const byte1 = audioData.charCodeAt(i * 2);
+                            const byte2 = audioData.charCodeAt(i * 2 + 1);
+                            pcmData[i] = (byte2 << 8) | byte1;
+                        }
+
+                        // Convert PCM16 to Float32 for Web Audio API
+                        const float32Data = new Float32Array(pcmData.length);
+                        for (let i = 0; i < pcmData.length; i++) {
+                            float32Data[i] = pcmData[i] / 32768.0;
+                        }
+
+                        // Create audio buffer and play
+                        const buffer = audioContext.createBuffer(1, float32Data.length, 24000); // 24kHz
+                        buffer.copyToChannel(float32Data, 0);
+
+                        const source = audioContext.createBufferSource();
+                        source.buffer = buffer;
+                        source.connect(translatedGain);
+                        source.start();
+
+                        console.log('🔊 Playing audio chunk:', float32Data.length, 'samples');
+                    }
+                    break;
+
+                case 'response.audio_transcript.text':
+                case 'response.audio_transcript.delta':
+                    // Update translated caption
+                    if (msg.text) {
+                        targetCaption.querySelector('.text').textContent = msg.text;
+                        targetCaption.style.opacity = '1';
+                        console.log('📝 Translation:', msg.text);
+                    }
+                    break;
+
+                case 'input_audio_transcript.text':
+                case 'input_audio_transcript.delta':
+                    // Update source caption (from main translation API)
+                    if (msg.text) {
+                        sourceCaption.querySelector('.text').textContent = msg.text;
+                        sourceCaption.style.opacity = '1';
+                        console.log('🎤 Source:', msg.text);
+                    }
+                    break;
+
+                default:
+                    console.log('📡 Data channel message:', type, msg);
+                    break;
+            }
+        }
+
         // Update caption labels with current language names
         function updateCaptionLabels() {
             const srcLang = document.getElementById('srcLanguage').value;
@@ -1581,8 +1683,8 @@
         function stopStream() {
             isStreaming = false;
 
-            // Stop DashScope ASR
-            stopDashScopeASR();
+            // Stop Hanzo ASR
+            stopHanzoASR();
 
             if (mediaStream) {
                 mediaStream.getTracks().forEach(track => track.stop());
@@ -1611,9 +1713,11 @@
 
             // Reset latency displays
             latencyHistory = [];
-            latencyDisplay.textContent = 'Latency: --ms';
+            latencyDisplay.textContent = '--ms';
             e2eLatency.textContent = '--ms';
             avgLatencyEl.textContent = '--ms';
+            const headerAvg = document.getElementById('headerAvgLatency');
+            if (headerAvg) headerAvg.textContent = '--ms';
 
             updateStatus('disconnected');
             startBtn.disabled = false;

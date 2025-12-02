@@ -190,7 +190,7 @@ TARGET_LANGUAGES = [LANG_MAP[code] for code in ["en", "zh", "ru", "fr", "de", "p
 
 
 class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
-    def __init__(self) -> None:
+    def __init__(self, session_config: dict = None) -> None:
         print("🔧 LiveTranslateHandler.__init__() called")
         super().__init__(
             expected_layout="mono",
@@ -211,12 +211,20 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         # Source language transcript (English input)
         self.source_text = ""
         self.source_temp = ""
-        print("🔧 LiveTranslateHandler.__init__() complete")
+
+        # Session-specific config (avoids race conditions with concurrent users)
+        self.session_config = session_config or {
+            "src_language": "Spanish",
+            "target_language": "English",
+            "voice": "Nofish"
+        }
+        print(f"🔧 LiveTranslateHandler.__init__() complete, config: {self.session_config}")
 
 
     def copy(self):
         print("🔧 LiveTranslateHandler.copy() called - creating new handler instance")
-        return LiveTranslateHandler()
+        # Pass session config to the new handler instance
+        return LiveTranslateHandler(session_config=self.session_config.copy() if self.session_config else None)
 
     @staticmethod
     def msg_id() -> str:
@@ -224,13 +232,13 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
     async def start_up(self):
         try:
-            # Use current_session_config (set by /api/webrtc/offer endpoint)
-            # This works for single-instance mode where only one stream is active
-            print(f"🎤 Handler starting with current_session_config: {current_session_config}")
+            # Use instance session_config (set during handler creation)
+            # This supports concurrent users with different language settings
+            print(f"🎤 Handler starting with session_config: {self.session_config}")
 
-            src_language_name = current_session_config.get("src_language", "Spanish")
-            target_language_name = current_session_config.get("target_language", "English")
-            voice_id = current_session_config.get("voice", "Cherry")
+            src_language_name = self.session_config.get("src_language", "Spanish")
+            target_language_name = self.session_config.get("target_language", "English")
+            voice_id = self.session_config.get("voice", "Nofish")
 
             src_language_code = LANG_MAP_REVERSE.get(src_language_name, "en")
             target_language_code = LANG_MAP_REVERSE.get(target_language_name, "es")
@@ -681,25 +689,27 @@ async def webrtc_offer(offer: WebRTCOffer):
     This endpoint receives SDP offers and returns SDP answers
     for establishing low-latency WebRTC connections.
     """
-    global current_session_config
     try:
         # Generate session ID
         session_id = secrets.token_hex(16)
 
-        # Store session config
-        active_sessions[session_id] = {
-            "src_language": offer.src_language,
-            "target_language": offer.target_language,
-            "voice": offer.voice,
-            "created_at": time.time()
-        }
-
-        # Also set as current session for single-instance mode
-        current_session_config = {
+        # Create session config for this specific user
+        session_config = {
             "src_language": offer.src_language,
             "target_language": offer.target_language,
             "voice": offer.voice
         }
+
+        # Store session config
+        active_sessions[session_id] = {
+            **session_config,
+            "created_at": time.time()
+        }
+
+        # Set session config on the stream handler BEFORE calling offer
+        # This ensures the handler uses this user's language settings
+        stream.handler.session_config = session_config.copy()
+
         print(f"📡 WebRTC offer received: {offer.src_language} -> {offer.target_language}, voice: {offer.voice}")
 
         # Use FastRTC's internal offer handling with proper Body object

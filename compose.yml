@@ -7,14 +7,13 @@ services:
     ports:
       - "${PORT:-8000}:8000"
     environment:
-      # Backend configuration (choose one)
+      # Backend configuration
       - API_KEY=${API_KEY:-}
-      - HANZO_NODE_URL=${HANZO_NODE_URL:-http://hanzo-node:3690}
+      - API_URL=${API_URL:-}
+      - ASR_API_URL=${ASR_API_URL:-}
+      - HANZO_NODE_URL=${HANZO_NODE_URL:-}
       - ZEN_OMNI_PATH=${ZEN_OMNI_PATH:-}
-      # Hanzo API endpoints (ws-api.hanzo.ai)
-      - API_URL=${API_URL:-wss://ws-api.hanzo.ai/v1/realtime?model=zen-live}
-      - ASR_API_URL=${ASR_API_URL:-wss://ws-api.hanzo.ai/v1/realtime}
-      # Authentication (optional - set both to enable basic auth)
+      # Authentication
       - ZEN_LIVE_USER=${ZEN_LIVE_USER:-}
       - ZEN_LIVE_PASS=${ZEN_LIVE_PASS:-}
       # Input configuration
@@ -24,6 +23,7 @@ services:
       # Server config
       - PORT=8000
       - MODE=${MODE:-}
+      - BASE_URL=${BASE_URL:-https://zen-live.hanzo.ai}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
       interval: 30s
