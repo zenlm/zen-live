@@ -553,9 +553,50 @@ def enhance_ui():
         """)
     return demo
 
-app = FastAPI(
-    title="Zen Live",
-    description="""
+# Generate dynamic documentation based on environment
+auth_header = f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}" if AUTH_ENABLED else "No authentication required"
+ws_url = BASE_URL.replace("https", "wss").replace("http", "ws")
+
+# Build documentation string separately to avoid f-string issues
+auth_section = ""
+if AUTH_ENABLED:
+    auth_section = f"""HTTP Basic Auth is required for all protected endpoints.
+
+**Using the Authorization Header:**
+```
+{auth_header}
+```
+
+**Examples:**
+```bash
+# API Status
+curl -H '{auth_header}' \\
+     {BASE_URL}/api/status
+
+# WebSocket connection
+wscat -c '{ws_url}/v1/realtime' \\
+      -H '{auth_header}'
+
+# Stream audio output (replace SESSION_ID with actual session)
+curl -H '{auth_header}' \\
+     {BASE_URL}/audio/stream/SESSION_ID
+```"""
+else:
+    auth_section = """No authentication required - open access
+
+## API Examples:
+```bash
+# API Status
+curl {BASE_URL}/api/status
+
+# WebSocket connection
+wscat -c '{ws_url}/v1/realtime'
+
+# Stream audio output (replace SESSION_ID with actual session)
+curl {BASE_URL}/audio/stream/SESSION_ID
+```""".format(BASE_URL=BASE_URL, ws_url=ws_url)
+
+app_description = f"""
 # Zen Live - Real-time Speech Translation API
 
 Low-latency simultaneous translation service for broadcast news monitoring.
@@ -573,13 +614,24 @@ Low-latency simultaneous translation service for broadcast news monitoring.
 4. Click Start to begin translation
 
 ## Authentication
-When `ZEN_LIVE_USER` and `ZEN_LIVE_PASS` env vars are set, HTTP Basic Auth is required.
+{auth_section}
+
+## Session Management
+When you connect via WebRTC or WHIP, you receive a `webrtc_id` (session ID) in the response.
+Use this SESSION_ID to access:
+- Transcripts: `{BASE_URL}/outputs?webrtc_id=SESSION_ID`
+- Audio stream: `{BASE_URL}/audio/stream/SESSION_ID`
+- WAV audio: `{BASE_URL}/audio/wav/SESSION_ID`
 
 ## Broadcast Integration
 See [/broadcast/info](/broadcast/info) for ffmpeg, SRT, RTMP, and NDI integration examples.
 
 Powered by [Hanzo AI](https://hanzo.ai) | [GitHub](https://github.com/zenlm/zen-live)
-    """,
+"""
+
+app = FastAPI(
+    title="Zen Live",
+    description=app_description,
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -1044,9 +1096,9 @@ async def broadcast_info():
             "webrtc_offer": f"{BASE_URL}/webrtc/offer",
             "whip_ingest": f"{BASE_URL}/whip?src_language=Spanish&target_language=English",
             "whep_consume": f"{BASE_URL}/whep",
-            "transcript_sse": f"{BASE_URL}/outputs?webrtc_id=SESSION_ID",
-            "audio_pcm": f"{BASE_URL}/audio/stream/SESSION_ID",
-            "audio_wav": f"{BASE_URL}/audio/wav/SESSION_ID",
+            "transcript_sse": f"{BASE_URL}/outputs?webrtc_id={{SESSION_ID}}",
+            "audio_pcm": f"{BASE_URL}/audio/stream/{{SESSION_ID}}",
+            "audio_wav": f"{BASE_URL}/audio/wav/{{SESSION_ID}}",
             "api_status": f"{BASE_URL}/api/status",
             "api_sessions": f"{BASE_URL}/api/sessions"
         },
@@ -1079,6 +1131,20 @@ async def broadcast_info():
             "example_header": f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}" if AUTH_ENABLED else None,
             "curl_example": f"curl -u '{AUTH_USER}:{AUTH_PASS}' {BASE_URL}/" if AUTH_ENABLED else f"curl {BASE_URL}/",
             "websocket_example": f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime' -H 'Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}'" if AUTH_ENABLED else f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime'"
+        },
+        "session_management": {
+            "description": "Each connection creates a unique session identified by webrtc_id/SESSION_ID",
+            "how_to_get_session_id": {
+                "webrtc": "Returned in response to /api/webrtc/offer as 'webrtc_id'",
+                "whip": "Returned in Location header after POST to /whip",
+                "example_response": {"webrtc_id": "abc123def456..."},
+            },
+            "using_session_id": {
+                "transcripts": "GET /outputs?webrtc_id={your_session_id}",
+                "audio_stream": "GET /audio/stream/{your_session_id}",
+                "audio_wav": "GET /audio/wav/{your_session_id}",
+                "note": "Replace {your_session_id} with actual session ID from connection response"
+            }
         },
         "latency": {
             "typical": "200-500ms end-to-end",

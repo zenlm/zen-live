@@ -698,9 +698,9 @@
             font-size: 1rem;
         }
 
-        /* Simple mode (default) - hide advanced sections */
+        /* Simple mode (default) - show audio mixer, hide output endpoints */
         body:not(.advanced-mode) .audio-mixer {
-            display: none;
+            display: block;  /* Show audio mixer by default */
         }
 
         body:not(.advanced-mode) .output-endpoints {
