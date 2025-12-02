@@ -2074,6 +2074,102 @@
             };
         };
 
+        // Active streaming outputs (track for cleanup)
+        let activeOutputs = {};
+
+        // Start streaming outputs based on settings
+        window.startBroadcastOutputs = async function() {
+            const settings = getBroadcastSettings();
+            const sessionId = webrtcId || 'default';
+
+            // Start SRT output if configured
+            if (settings.srtOutputUrl) {
+                try {
+                    const resp = await fetch(`/api/streaming/output/start?session_id=${sessionId}&output_type=srt&output_url=${encodeURIComponent(settings.srtOutputUrl)}`, {
+                        method: 'POST'
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        activeOutputs.srt = data.output_id;
+                        console.log('📤 SRT output started:', data);
+                        showNotification('SRT output started');
+                    } else {
+                        console.error('Failed to start SRT output:', data);
+                        showNotification('SRT output failed: ' + (data.detail || 'Unknown error'));
+                    }
+                } catch (e) {
+                    console.error('SRT output error:', e);
+                }
+            }
+
+            // Start RTMP output if configured
+            if (settings.rtmpOutputUrl) {
+                try {
+                    const resp = await fetch(`/api/streaming/output/start?session_id=${sessionId}&output_type=rtmp&output_url=${encodeURIComponent(settings.rtmpOutputUrl)}`, {
+                        method: 'POST'
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        activeOutputs.rtmp = data.output_id;
+                        console.log('📤 RTMP output started:', data);
+                        showNotification('RTMP output started');
+                    } else {
+                        console.error('Failed to start RTMP output:', data);
+                    }
+                } catch (e) {
+                    console.error('RTMP output error:', e);
+                }
+            }
+
+            // Start NDI output if configured
+            if (settings.ndiOutputName) {
+                try {
+                    const resp = await fetch(`/api/streaming/output/start?session_id=${sessionId}&output_type=ndi&output_url=${encodeURIComponent(settings.ndiOutputName)}`, {
+                        method: 'POST'
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        activeOutputs.ndi = data.output_id;
+                        console.log('📤 NDI output started:', data);
+                        showNotification('NDI output started');
+                    } else {
+                        console.error('Failed to start NDI output:', data);
+                    }
+                } catch (e) {
+                    console.error('NDI output error:', e);
+                }
+            }
+        };
+
+        // Stop all streaming outputs
+        window.stopBroadcastOutputs = async function() {
+            for (const [type, outputId] of Object.entries(activeOutputs)) {
+                if (outputId) {
+                    try {
+                        await fetch(`/api/streaming/output/${outputId}`, { method: 'DELETE' });
+                        console.log(`📤 Stopped ${type} output: ${outputId}`);
+                    } catch (e) {
+                        console.error(`Failed to stop ${type} output:`, e);
+                    }
+                }
+            }
+            activeOutputs = {};
+            showNotification('Broadcast outputs stopped');
+        };
+
+        // Check streaming status
+        window.checkStreamingStatus = async function() {
+            try {
+                const resp = await fetch('/api/streaming/status');
+                const data = await resp.json();
+                console.log('📊 Streaming status:', data);
+                return data;
+            } catch (e) {
+                console.error('Failed to get streaming status:', e);
+                return null;
+            }
+        };
+
         // Simple notification function
         function showNotification(message) {
             const notification = document.createElement('div');

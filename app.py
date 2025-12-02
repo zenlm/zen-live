@@ -30,6 +30,7 @@ import json
 import secrets
 import signal
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 import gradio as gr
 import numpy as np
@@ -56,6 +57,8 @@ import ssl
 import certifi
 
 import cv2
+import subprocess
+import shutil
 
 load_dotenv()
 
@@ -515,7 +518,7 @@ def update_chatbot(chatbot: list[dict], response: dict):
 
 
 
-chatbot = gr.Chatbot(type="messages")
+chatbot = gr.Chatbot(type="messages", allow_tags=False)
 src_language = gr.Dropdown(
     choices=SRC_LANGUAGES,
     value="Spanish",   # Default to Spanish for news monitoring
@@ -688,6 +691,18 @@ See [/broadcast/info](/broadcast/info) for ffmpeg, SRT, RTMP, and NDI integratio
 Powered by [Hanzo AI](https://hanzo.ai) | [GitHub](https://github.com/zenlm/zen-live)
 """
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    # Startup
+    asyncio.create_task(cleanup_stale_sessions())
+    print("🚀 Started session cleanup background task")
+    yield
+    # Shutdown (cleanup if needed)
+    print("👋 Zen Live shutting down...")
+
+
 app = FastAPI(
     title="Zen Live",
     description=app_description,
@@ -703,7 +718,8 @@ app = FastAPI(
         "name": "Zen Live Support",
         "url": "https://github.com/zenlm/zen-live",
         "email": "support@hanzo.ai"
-    }
+    },
+    lifespan=lifespan
 )
 
 # CORS for control room access from different domains
@@ -716,13 +732,6 @@ app.add_middleware(
 )
 
 stream.mount(app)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Start background cleanup task on startup."""
-    asyncio.create_task(cleanup_stale_sessions())
-    print("🚀 Started session cleanup background task")
 
 
 # WebRTC offer model
@@ -1276,14 +1285,22 @@ async def broadcast_info():
             "bits_per_sample": 16
         },
         "integration_examples": {
-            "ffplay_direct": "ffplay -f s16le -ar 24000 -ac 1 http://host/audio/stream/ID",
-            "ffplay_broadcast": "ffplay -f s16le -ar 24000 -ac 1 http://host/audio/broadcast",
-            "ffmpeg_to_srt": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/broadcast -c:a aac -f mpegts 'srt://dest:port'",
-            "ffmpeg_to_rtmp": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/broadcast -c:a aac -f flv rtmp://dest/live/stream",
-            "ffmpeg_to_ndi": "ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/broadcast -f libndi_newtek -clock_video true 'ZEN-LIVE-TRANSLATED'",
-            "obs_browser": "Add Browser Source with URL: http://host/monitor?autostart=1",
-            "vlc": "vlc http://host/audio/wav/SESSION_ID",
-            "gstreamer_whip": "gst-launch-1.0 ... ! webrtcsink signaller::uri=http://host/whip"
+            "note": "All examples use HTTPS - works through Cloudflare tunnel!",
+            "ffplay_direct": f"ffplay -f s16le -ar 24000 -ac 1 {BASE_URL}/audio/stream/SESSION_ID",
+            "ffplay_broadcast": f"ffplay -f s16le -ar 24000 -ac 1 {BASE_URL}/audio/broadcast",
+            "ffmpeg_to_srt": f"ffmpeg -f s16le -ar 24000 -ac 1 -i {BASE_URL}/audio/broadcast -c:a aac -f mpegts 'srt://your-dest:port'",
+            "ffmpeg_to_rtmp": f"ffmpeg -f s16le -ar 24000 -ac 1 -i {BASE_URL}/audio/broadcast -c:a aac -f flv rtmp://your-server/live/stream",
+            "ffmpeg_to_ndi": f"ffmpeg -f s16le -ar 24000 -ac 1 -i {BASE_URL}/audio/broadcast -f libndi_newtek -clock_video true 'ZEN-LIVE-TRANSLATED'",
+            "obs_browser": f"Add Browser Source with URL: {BASE_URL}/monitor?autostart=1",
+            "vlc": f"vlc {BASE_URL}/audio/wav/SESSION_ID",
+            "curl_test": f"curl -N {BASE_URL}/audio/broadcast | ffplay -f s16le -ar 24000 -ac 1 -"
+        },
+        "cloudflare_tunnel_notes": {
+            "https_works": "All HTTP/HTTPS endpoints work through Cloudflare tunnel",
+            "websocket_works": "WebSocket (wss://) works through Cloudflare tunnel",
+            "srt_rtmp_input_needs_direct": "SRT/RTMP INPUT requires direct server access (not via tunnel)",
+            "srt_rtmp_output_works": "SRT/RTMP OUTPUT works - ffmpeg pulls from HTTPS and pushes to your destination",
+            "recommended_workflow": "Use WHIP for input (WebRTC over HTTPS), use /audio/broadcast for output"
         },
         "authentication": {
             "enabled": AUTH_ENABLED,
@@ -1334,6 +1351,251 @@ def _(webrtc_id: str):
             yield f"event: output\ndata: {s}\n\n"
 
     return StreamingResponse(output_stream(), media_type="text/event-stream")
+
+
+# =============================================================================
+# Streaming Input/Output Management (SRT, RTMP, NDI)
+# =============================================================================
+
+# Active ffmpeg processes for streaming
+streaming_processes = {}  # session_id -> {"type": "srt_in"|"srt_out"|"rtmp_out", "process": subprocess.Popen}
+
+
+def check_ffmpeg():
+    """Check if ffmpeg is available."""
+    return shutil.which("ffmpeg") is not None
+
+
+class StreamingConfig(BaseModel):
+    """Configuration for streaming input/output."""
+    session_id: Optional[str] = None
+    url: str
+    src_language: str = "Spanish"
+    target_language: str = "English"
+    voice: str = "Cherry"
+
+
+@app.get("/api/streaming/status")
+async def streaming_status(_auth: bool = Depends(optional_auth)):
+    """Get status of all active streaming processes."""
+    ffmpeg_available = check_ffmpeg()
+
+    active_streams = []
+    for sid, info in streaming_processes.items():
+        proc = info.get("process")
+        active_streams.append({
+            "session_id": sid,
+            "type": info.get("type"),
+            "url": info.get("url"),
+            "running": proc.poll() is None if proc else False
+        })
+
+    return JSONResponse({
+        "ffmpeg_available": ffmpeg_available,
+        "active_streams": active_streams,
+        "supported_inputs": ["srt", "rtmp"] if ffmpeg_available else [],
+        "supported_outputs": ["srt", "rtmp", "ndi"] if ffmpeg_available else []
+    })
+
+
+@app.post("/api/streaming/output/start")
+async def start_streaming_output(
+    session_id: str,
+    output_type: str,  # "srt", "rtmp", or "ndi"
+    output_url: str,
+    _auth: bool = Depends(optional_auth)
+):
+    """
+    Start streaming translated audio to SRT/RTMP/NDI destination.
+
+    This spawns an ffmpeg process that reads from /audio/broadcast and outputs
+    to the specified destination.
+    """
+    if not check_ffmpeg():
+        raise HTTPException(500, "ffmpeg not available - install ffmpeg to enable streaming")
+
+    # Build audio input URL
+    audio_url = f"http://localhost:{PORT}/audio/broadcast"
+
+    # Build ffmpeg command based on output type
+    if output_type == "srt":
+        if not output_url.startswith("srt://"):
+            raise HTTPException(400, "SRT URL must start with srt://")
+        cmd = [
+            "ffmpeg", "-re",
+            "-f", "s16le", "-ar", "24000", "-ac", "1",
+            "-i", audio_url,
+            "-c:a", "aac", "-b:a", "128k",
+            "-f", "mpegts",
+            output_url
+        ]
+    elif output_type == "rtmp":
+        if not output_url.startswith("rtmp://"):
+            raise HTTPException(400, "RTMP URL must start with rtmp://")
+        cmd = [
+            "ffmpeg", "-re",
+            "-f", "s16le", "-ar", "24000", "-ac", "1",
+            "-i", audio_url,
+            "-c:a", "aac", "-b:a", "128k",
+            "-f", "flv",
+            output_url
+        ]
+    elif output_type == "ndi":
+        # NDI requires libndi - output_url is the NDI source name
+        ndi_name = output_url if output_url else "ZEN-LIVE-TRANSLATED"
+        cmd = [
+            "ffmpeg", "-re",
+            "-f", "s16le", "-ar", "24000", "-ac", "1",
+            "-i", audio_url,
+            "-f", "libndi_newtek",
+            "-clock_video", "true",
+            ndi_name
+        ]
+    else:
+        raise HTTPException(400, f"Unsupported output type: {output_type}")
+
+    # Start ffmpeg process
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        output_id = f"{output_type}_{session_id}_{secrets.token_hex(4)}"
+        streaming_processes[output_id] = {
+            "type": f"{output_type}_out",
+            "url": output_url,
+            "process": process,
+            "session_id": session_id
+        }
+
+        print(f"📤 Started {output_type} output: {output_url} (PID: {process.pid})")
+
+        return JSONResponse({
+            "status": "started",
+            "output_id": output_id,
+            "output_type": output_type,
+            "output_url": output_url,
+            "pid": process.pid
+        })
+
+    except Exception as e:
+        raise HTTPException(500, f"Failed to start ffmpeg: {str(e)}")
+
+
+@app.delete("/api/streaming/output/{output_id}")
+async def stop_streaming_output(output_id: str, _auth: bool = Depends(optional_auth)):
+    """Stop a streaming output process."""
+    if output_id not in streaming_processes:
+        raise HTTPException(404, "Output stream not found")
+
+    info = streaming_processes[output_id]
+    proc = info.get("process")
+
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    del streaming_processes[output_id]
+    print(f"📤 Stopped output: {output_id}")
+
+    return JSONResponse({"status": "stopped", "output_id": output_id})
+
+
+@app.post("/api/streaming/input/start")
+async def start_streaming_input(config: StreamingConfig, _auth: bool = Depends(optional_auth)):
+    """
+    Start ingesting from SRT/RTMP source for translation.
+
+    Note: This is for server-side ingestion. The audio will be fed into a
+    translation session. For browser-based input, use the WebRTC endpoints.
+    """
+    if not check_ffmpeg():
+        raise HTTPException(500, "ffmpeg not available - install ffmpeg to enable streaming")
+
+    url = config.url
+
+    # Validate URL
+    if url.startswith("srt://"):
+        input_type = "srt"
+    elif url.startswith("rtmp://"):
+        input_type = "rtmp"
+    else:
+        raise HTTPException(400, "URL must start with srt:// or rtmp://")
+
+    session_id = config.session_id or secrets.token_hex(16)
+
+    # Build ffmpeg command to ingest and convert to PCM
+    cmd = [
+        "ffmpeg", "-re",
+        "-i", url,
+        "-c:a", "pcm_s16le",
+        "-ar", "16000",
+        "-ac", "1",
+        "-f", "s16le",
+        "pipe:1"
+    ]
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        input_id = f"{input_type}_in_{session_id}"
+        streaming_processes[input_id] = {
+            "type": f"{input_type}_in",
+            "url": url,
+            "process": process,
+            "session_id": session_id,
+            "config": config.model_dump()
+        }
+
+        print(f"📥 Started {input_type} input: {url} (PID: {process.pid})")
+
+        # TODO: Feed audio from process.stdout to a translation handler
+        # This requires creating a handler instance and feeding audio chunks
+        # For now, this sets up the process - full integration TBD
+
+        return JSONResponse({
+            "status": "started",
+            "input_id": input_id,
+            "input_type": input_type,
+            "session_id": session_id,
+            "input_url": url,
+            "pid": process.pid,
+            "note": "Audio ingestion started. Full translation integration in progress."
+        })
+
+    except Exception as e:
+        raise HTTPException(500, f"Failed to start ffmpeg: {str(e)}")
+
+
+@app.delete("/api/streaming/input/{input_id}")
+async def stop_streaming_input(input_id: str, _auth: bool = Depends(optional_auth)):
+    """Stop a streaming input process."""
+    if input_id not in streaming_processes:
+        raise HTTPException(404, "Input stream not found")
+
+    info = streaming_processes[input_id]
+    proc = info.get("process")
+
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    del streaming_processes[input_id]
+    print(f"📥 Stopped input: {input_id}")
+
+    return JSONResponse({"status": "stopped", "input_id": input_id})
 
 
 # =============================================================================
