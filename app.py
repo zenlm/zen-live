@@ -77,7 +77,8 @@ SRT_INPUT_URL = os.environ.get("SRT_INPUT_URL")  # e.g., srt://source:9000?mode=
 RTMP_INPUT_URL = os.environ.get("RTMP_INPUT_URL")  # e.g., rtmp://source/live/stream
 WHIP_ENABLED = os.environ.get("WHIP_ENABLED", "true").lower() == "true"  # WebRTC WHIP input
 
-API_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?model=qwen3-livetranslate-flash-realtime"
+API_URL = os.environ.get("API_URL", "")
+ASR_API_URL = os.environ.get("ASR_API_URL", "")
 
 # HTTP Basic Auth setup
 security = HTTPBasic()
@@ -1424,7 +1425,7 @@ async def list_voices():
             }
             for voice_id, info in SUPPORTED_VOICES.items()
         ],
-        "default": "Cherry",
+        "default": "Nofish",
         "multilingual": ["Cherry", "Nofish"],
         "regional": ["Jada", "Dylan", "Sunny", "Peter", "Kiki", "Eric"]
     })
