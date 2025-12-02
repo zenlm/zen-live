@@ -240,7 +240,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         self.video_queue = asyncio.Queue()
 
         self.last_send_time = 0.0     # Last send timestamp
-        self.video_interval = 0.5     # Interval in seconds
+        self.video_interval = 0.5     # Interval in seconds (match reference: 2fps for context)
         self.latest_frame = None
 
         self.awaiting_new_message = True
@@ -276,9 +276,12 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             pending_session_id = None  # Clear pending
         return new_handler
 
-    @staticmethod
-    def msg_id() -> str:
-        return f"event_{secrets.token_hex(10)}"
+    _msg_counter = 0
+
+    @classmethod
+    def msg_id(cls) -> str:
+        cls._msg_counter += 1
+        return f"evt_{cls._msg_counter}"
 
     async def start_up(self):
         try:
@@ -420,38 +423,45 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
     # Client -> Server: receive video frame
     async def video_receive(self, frame: np.ndarray):
-        print(f"📹 Receiving video frame, shape: {frame.shape}, connection: {self.connection is not None}")
         self.latest_frame = frame
         if self.connection is None:
             return
 
-        # Push frame to local queue for display immediately
-        await self.video_queue.put(frame)
+        # Push frame to local queue for display immediately (non-blocking)
+        try:
+            self.video_queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            pass  # Drop frame if queue full
 
         now = time.time()
         if now - self.last_send_time < self.video_interval:
             return
         self.last_send_time = now
 
-        # Send to cloud
-        frame_resized = cv2.resize(frame, (640, 360))
-        _, buf = cv2.imencode(".jpg", frame_resized, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        jpeg_bytes = buf.tobytes()
-        img_b64 = base64.b64encode(jpeg_bytes).decode()
+        # Process video in background task to not block audio
+        asyncio.create_task(self._send_video_frame(frame))
 
-        # Publish to video stream subscribers for remote viewers
-        if self.session_id:
-            await publish_video_to_subscribers(jpeg_bytes, self.session_id)
+    async def _send_video_frame(self, frame: np.ndarray):
+        """Send video frame to API - runs in background to not block audio."""
+        try:
+            if self.connection is None:
+                return
+            # Resize and encode (CPU-bound work)
+            frame_resized = cv2.resize(frame, (640, 360))
+            _, buf = cv2.imencode(".jpg", frame_resized, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+            jpeg_bytes = buf.tobytes()
+            img_b64 = base64.b64encode(jpeg_bytes).decode()
 
-        await self.connection.send(
-            json.dumps(
-                {
-                    "event_id": self.msg_id(),
-                    "type": "input_image_buffer.append",
-                    "image": img_b64,
-                }
-            )
-        )
+            # Publish to video stream subscribers for remote viewers
+            if self.session_id:
+                await publish_video_to_subscribers(jpeg_bytes, self.session_id)
+
+            # Send to API
+            msg = f'{{"event_id":"evt_{self._msg_counter}","type":"input_image_buffer.append","image":"{img_b64}"}}'
+            self._msg_counter += 1
+            await self.connection.send(msg)
+        except Exception as e:
+            pass  # Don't let video errors affect audio
 
     # Server -> Client: emit video frame
     async def video_emit(self):
@@ -461,21 +471,15 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
 
     async def receive(self, frame):
-        print(f"📥 Receiving audio frame, connection: {self.connection is not None}")
+        # Audio receive - send immediately with minimal overhead
         if self.connection is None:
             return
-        sr, array = frame          # frame is (sample_rate, np.ndarray)
-        array = array.squeeze()
-        audio_b64 = base64.b64encode(array.tobytes()).decode()
-        await self.connection.send(
-            json.dumps(
-                {
-                    "event_id": self.msg_id(),
-                    "type": "input_audio_buffer.append",
-                    "audio": audio_b64,
-                }
-            )
-        )
+        sr, array = frame
+        audio_b64 = base64.b64encode(array.squeeze().tobytes()).decode()
+        # Use string formatting instead of json.dumps for speed
+        msg = f'{{"event_id":"evt_{self._msg_counter}","type":"input_audio_buffer.append","audio":"{audio_b64}"}}'
+        self._msg_counter += 1
+        await self.connection.send(msg)
 
 
     async def emit(self) -> tuple[int, np.ndarray] | AdditionalOutputs | None:

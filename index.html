@@ -1016,6 +1016,7 @@
         let audioAnalyser = null;
         let isStreaming = false;
         let lastTranscriptTime = 0;  // Track time between transcripts for latency
+        let streamStartTime = 0;     // When stream started
 
         // Audio mixer state
         let sourceGainNode = null;
@@ -1364,6 +1365,7 @@
                     document.getElementById('shareBtn').disabled = false;  // Enable share
                     lastTranscriptTime = 0;  // Reset latency tracking
                     latencyHistory = [];     // Clear history
+                    streamStartTime = Date.now();  // Track when stream started
                     // Update caption labels with current languages
                     updateCaptionLabels();
                     // Start browser speech recognition for source captions
@@ -1456,38 +1458,39 @@
                 // Update latency displays - measure time between transcript updates
                 const now = Date.now();
 
-                // Only measure latency for translated content (assistant role), not source
-                if (data.role === 'assistant' && data.content) {
-                    console.log('📊 Latency check - lastTime:', lastTranscriptTime, 'now:', now);
+                // Track latency for any content (assistant or source)
+                if (data.content || data.source_content) {
+                    console.log('📊 Latency check - lastTime:', lastTranscriptTime, 'now:', now, 'data:', data.role || 'source');
+
+                    // Show update indicator immediately
+                    const timeSinceStart = Math.round((now - streamStartTime) / 1000);
+
                     if (lastTranscriptTime > 0) {
                         const latency = now - lastTranscriptTime;
                         console.log('📊 Calculated latency:', latency, 'ms');
-                        // Only show reasonable latencies (between 50ms and 10s)
-                        if (latency > 50 && latency < 10000) {
-                            // Update sidebar latency
-                            e2eLatency.textContent = `${latency}ms`;
-                            e2eLatency.className = latency > 3000 ? 'latency-value high' : 'latency-value';
 
-                            // Update header latency
-                            latencyDisplay.textContent = `${latency}ms`;
+                        // Update displays with time since last update
+                        e2eLatency.textContent = `${latency}ms`;
+                        e2eLatency.className = latency > 5000 ? 'latency-value high' : 'latency-value';
+                        latencyDisplay.textContent = `${latency}ms`;
+                        latencyDisplay.style.color = latency > 5000 ? 'var(--warning)' : '';
 
-                            // Track for average
+                        // Track for average (only reasonable values)
+                        if (latency > 50 && latency < 30000) {
                             latencyHistory.push(latency);
                             if (latencyHistory.length > 10) latencyHistory.shift();
 
-                            // Calculate and show average
                             const avg = Math.round(latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length);
                             avgLatencyEl.textContent = `${avg}ms`;
-                            avgLatencyEl.className = avg > 3000 ? 'latency-value high' : 'latency-value';
+                            avgLatencyEl.className = avg > 5000 ? 'latency-value high' : 'latency-value';
 
-                            // Update header avg latency
                             const headerAvg = document.getElementById('headerAvgLatency');
                             if (headerAvg) headerAvg.textContent = `${avg}ms`;
                         }
                     } else {
-                        // First transcript - show measuring indicator
-                        e2eLatency.textContent = '...';
-                        latencyDisplay.textContent = '...';
+                        // First update
+                        e2eLatency.textContent = 'connected';
+                        latencyDisplay.textContent = 'connected';
                     }
                     lastTranscriptTime = now;
                 }
