@@ -47,4 +47,5 @@ services:
 
 networks:
   hanzo-network:
+    name: hanzo-network
     external: true
