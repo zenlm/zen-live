@@ -1,5 +1,6 @@
 # Development compose file
 # Usage: docker compose -f compose.dev.yml up -d
+# Cloudflare tunnel connects directly to port 8001
 
 services:
   zen-live-dev:

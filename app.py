@@ -219,7 +219,7 @@ LANG_MAP_REVERSE = {v: k for k, v in LANG_MAP.items()}
 handler_registry = {}  # session_id -> LiveTranslateHandler
 # Pending session ID to be assigned to the next handler that starts
 pending_session_id = None
-# SRC_LANGUAGES = ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar", "hi", "el", "tr"]  # 使用相同的语言列表
+# SRC_LANGUAGES = ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar", "hi", "el", "tr"]
 # TARGET_LANGUAGES = ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar"]
 
 # Spanish first for news monitoring default
@@ -239,13 +239,13 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         self.output_queue = asyncio.Queue()
         self.video_queue = asyncio.Queue()
 
-        self.last_send_time = 0.0     # 上次发送时间
-        self.video_interval = 0.5     # 间隔 0.5 s
+        self.last_send_time = 0.0     # Last send timestamp
+        self.video_interval = 0.5     # Interval in seconds
         self.latest_frame = None
 
         self.awaiting_new_message = True
-        self.stable_text = ""  # 黑色部分
-        self.temp_text = ""    # 灰色部分
+        self.stable_text = ""  # Confirmed text (black)
+        self.temp_text = ""    # Interim text (gray)
         # Source language transcript (English input)
         self.source_text = ""
         self.source_temp = ""
@@ -297,7 +297,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             print(f"🌐 Translation: {src_language_name} ({src_language_code}) -> {target_language_name} ({target_language_code}), Voice: {voice_id}")
 
             if src_language_code == target_language_code:
-                print(f"⚠️ 源语言和目标语言相同({target_language_name})，将以复述模式运行")
+                print(f"⚠️ Source and target language are the same ({target_language_name}), running in echo mode")
 
             print(f"🔌 Connecting to Hanzo WebSocket: {TRANSLATE_API_URL[:50]}...")
             async with connect(TRANSLATE_API_URL, additional_headers=headers, ssl=ssl_context) as conn:
@@ -325,7 +325,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                 self.connection = conn
                 print("🎧 Now listening for Hanzo responses...")
 
-                # WebSocket 收到的每一个响应（data）是一个 JSON 事件，表示翻译任务的进展。
+                # Each WebSocket response (data) is a JSON event representing translation progress
                 async for data in self.connection:
                     print(f"📨 Hanzo response: {data[:200]}..." if len(data) > 200 else f"📨 Hanzo response: {data}")
                     event = json.loads(data)
@@ -362,7 +362,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                             )
 
                     elif event_type in ("response.text.text", "response.audio_transcript.text"):
-                        # 更新稳定部分（stash / text 认为是已确认的）
+                        # Update stable text (stash/text are confirmed)
                         self.stable_text = event.get("text", "") or ""
                         self.temp_text = event.get("stash", "") or ""
                         # self.stable_text = event.get("stash", "") or ""
@@ -373,7 +373,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                         await self.output_queue.put(
                             AdditionalOutputs({
                                 "role": "assistant",
-                                # 将稳定文本变黑色、临时文本变灰色
+                                # Stable text is black, interim text is gray
                                 "content": f"<span style='color:black'>{self.stable_text}</span>"
                                         f"<span style='color:gray'>{self.temp_text}</span>",
                                 "update": True,
@@ -396,7 +396,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                                     "new_message": self.awaiting_new_message
                                 })
                             )
-                        # 开启新气泡
+                        # Start new message bubble
                         self.awaiting_new_message = True
                         self.stable_text = ""
                         self.temp_text = ""
@@ -418,7 +418,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             print(f"Connection error: {e}")
             await self.shutdown()
 
-    # 客户端 to 服务端
+    # Client -> Server: receive video frame
     async def video_receive(self, frame: np.ndarray):
         print(f"📹 Receiving video frame, shape: {frame.shape}, connection: {self.connection is not None}")
         self.latest_frame = frame
@@ -433,7 +433,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             return
         self.last_send_time = now
 
-        # 发送到云端
+        # Send to cloud
         frame_resized = cv2.resize(frame, (640, 360))
         _, buf = cv2.imencode(".jpg", frame_resized, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         img_b64 = base64.b64encode(buf.tobytes()).decode()
@@ -448,15 +448,8 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             )
         )
 
-    # 服务端 2 客户端
+    # Server -> Client: emit video frame
     async def video_emit(self):
-        # frame = await wait_for_item(self.video_queue, 0.01)
-        # # print(f"能够显示出来的=================={frame.dtype}==================")
-        # if frame is not None:
-        #     return frame
-        # else:
-        #     # return np.zeros((100, 100, 3), dtype=np.uint8)
-        #     return None
         if self.latest_frame is not None:
             return self.latest_frame
         return np.zeros((100, 100, 3), dtype=np.uint8)
@@ -466,7 +459,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         print(f"📥 Receiving audio frame, connection: {self.connection is not None}")
         if self.connection is None:
             return
-        sr, array = frame          # frame 一定是 (sr, np.ndarray)
+        sr, array = frame          # frame is (sample_rate, np.ndarray)
         array = array.squeeze()
         audio_b64 = base64.b64encode(array.tobytes()).decode()
         await self.connection.send(
@@ -484,16 +477,13 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         return await wait_for_item(self.output_queue)
 
     async def shutdown(self) -> None:
-        """关闭连接并清理资源"""
-        # if self.video_capture:
-        #     self.video_capture.release()  # 释放视频设备
-        #     self.video_capture = None
+        """Close connection and cleanup resources"""
 
         if self.connection:
             await self.connection.close()
             self.connection = None
 
-        # 清空队列
+        # Clear queue
         while not self.output_queue.empty():
             self.output_queue.get_nowait()
 
@@ -542,7 +532,7 @@ latest_message = gr.Textbox(type="text", visible=False)
 
 # 可选：暂时禁用 TURN 配置进行测试
 rtc_config = get_cloudflare_turn_credentials_async if get_space() else None
-# rtc_config = None  # 取消注释可禁用 TURN 测试
+# rtc_config = None  # Uncomment to disable TURN for testing
 
 
 stream = Stream(
@@ -558,7 +548,7 @@ stream = Stream(
     time_limit=90 if get_space() else None,
 )
 
-#  前端
+# Frontend UI customization
 def enhance_ui():
     with stream.ui as demo:
         gr.HTML("""

@@ -1241,6 +1241,10 @@
                     updateCaptionLabels();
                     // Start browser speech recognition for source captions
                     startSpeechRecognition();
+                    // Auto-start broadcast outputs if configured
+                    if (typeof startBroadcastOutputs === 'function') {
+                        startBroadcastOutputs();
+                    }
                 } else if (peerConnection.connectionState === 'failed') {
                     updateStatus('error');
                 }
@@ -1689,6 +1693,11 @@
 
         function stopStream() {
             isStreaming = false;
+
+            // Stop broadcast outputs
+            if (typeof stopBroadcastOutputs === 'function') {
+                stopBroadcastOutputs();
+            }
 
             // Stop Hanzo ASR
             stopHanzoASR();
