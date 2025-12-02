@@ -530,7 +530,7 @@ voice = gr.Dropdown(choices=VOICES, value=VOICES[0], type="value", label="Voice"
 
 latest_message = gr.Textbox(type="text", visible=False)
 
-# 可选：暂时禁用 TURN 配置进行测试
+# Optional: Temporarily disable TURN configuration for testing
 rtc_config = get_cloudflare_turn_credentials_async if get_space() else None
 # rtc_config = None  # Uncomment to disable TURN for testing
 
