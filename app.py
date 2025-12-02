@@ -10,7 +10,7 @@ Backend options:
   3. Local Zen Omni model - Set ZEN_OMNI_PATH
 
 Usage:
-  export HANZO_NODE_URL=http://localhost:9550  # or
+  export HANZO_NODE_URL=http://localhost:3690  # or
   export API_KEY=your_hanzo_key
   python app.py
 

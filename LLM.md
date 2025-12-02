@@ -28,7 +28,7 @@ Control Room Browser
 
 ## Backend Options
 
-1. **Hanzo Node** (recommended): `HANZO_NODE_URL=http://host:9550`
+1. **Hanzo Node** (recommended): `HANZO_NODE_URL=http://host:3690`
 2. **DashScope Direct**: `API_KEY=xxx`
 3. **Zen Omni Local** (future): `ZEN_OMNI_PATH=/path/to/model`
 

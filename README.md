@@ -28,7 +28,7 @@ cd zen-live
 pip install -r requirements.txt
 
 # Configure backend (choose one):
-export HANZO_NODE_URL=http://localhost:9550   # Recommended: Hanzo Node
+export HANZO_NODE_URL=http://localhost:3690   # Recommended: Hanzo Node
 # or
 export API_KEY=your_hanzo_api_key         # Direct Hanzo API
 
@@ -74,7 +74,7 @@ Use the OpenAPI spec to generate client SDKs in any language.
 Connect to a [Hanzo Node](https://github.com/hanzoai/hanzo-node) instance for managed translation infrastructure.
 
 ```bash
-export HANZO_NODE_URL=http://your-hanzo-node:9550
+export HANZO_NODE_URL=http://your-hanzo-node:3690
 ```
 
 ### 2. Direct Hanzo API
