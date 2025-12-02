@@ -67,8 +67,12 @@ HANZO_NODE_URL = os.environ.get("HANZO_NODE_URL")  # Preferred: Hanzo Node backe
 API_KEY = os.environ.get("API_KEY")  # Fallback: Direct Hanzo API
 ZEN_OMNI_PATH = os.environ.get("ZEN_OMNI_PATH")  # Optional: Local model path
 
+# Server configuration
+BASE_URL = os.environ.get("BASE_URL", "https://zen-live.hanzo.ai")  # Public URL for docs
+PORT = int(os.environ.get("PORT", 8000))
+
 # Authentication (optional - set both to enable)
-AUTH_USER = os.environ.get("ZEN_LIVE_USER")  # e.g., psigg@americasvoice.news
+AUTH_USER = os.environ.get("ZEN_LIVE_USER")  # e.g., admin
 AUTH_PASS = os.environ.get("ZEN_LIVE_PASS")  # e.g., livedemo2025
 AUTH_ENABLED = bool(AUTH_USER and AUTH_PASS)
 
@@ -897,7 +901,16 @@ async def api_status():
         "status": "healthy",
         "service": "zen-live-translate",
         "version": "1.0.0",
+        "base_url": BASE_URL,
         "active_sessions": len(active_sessions),
+        "authentication": {
+            "enabled": AUTH_ENABLED,
+            "type": "HTTP Basic Auth" if AUTH_ENABLED else "None",
+            "header": "Authorization: Basic <base64(username:password)>" if AUTH_ENABLED else None,
+            "example": f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}" if AUTH_ENABLED else None,
+            "curl_example": f"curl -u '{AUTH_USER}:{AUTH_PASS}' {BASE_URL}/api/status" if AUTH_ENABLED else f"curl {BASE_URL}/api/status",
+            "websocket_example": f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime' -H 'Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}'" if AUTH_ENABLED else f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime'"
+        },
         "supported_languages": {
             "source": SRC_LANGUAGES,
             "target": TARGET_LANGUAGES
@@ -1023,20 +1036,19 @@ async def broadcast_info():
     """
     Information for broadcast engineers on how to integrate.
     """
-    base_url = "http://YOUR_HOST:8000"
     return JSONResponse({
         "service": "Zen Live Translate - Broadcast Integration",
         "endpoints": {
-            "control_room_ui": f"{base_url}/",
-            "monitor_only": f"{base_url}/monitor?autostart=1",
-            "webrtc_offer": f"{base_url}/webrtc/offer",
-            "whip_ingest": f"{base_url}/whip?src_language=Spanish&target_language=English",
-            "whep_consume": f"{base_url}/whep",
-            "transcript_sse": f"{base_url}/outputs?webrtc_id=SESSION_ID",
-            "audio_pcm": f"{base_url}/audio/stream/SESSION_ID",
-            "audio_wav": f"{base_url}/audio/wav/SESSION_ID",
-            "api_status": f"{base_url}/api/status",
-            "api_sessions": f"{base_url}/api/sessions"
+            "control_room_ui": f"{BASE_URL}/",
+            "monitor_only": f"{BASE_URL}/monitor?autostart=1",
+            "webrtc_offer": f"{BASE_URL}/webrtc/offer",
+            "whip_ingest": f"{BASE_URL}/whip?src_language=Spanish&target_language=English",
+            "whep_consume": f"{BASE_URL}/whep",
+            "transcript_sse": f"{BASE_URL}/outputs?webrtc_id=SESSION_ID",
+            "audio_pcm": f"{BASE_URL}/audio/stream/SESSION_ID",
+            "audio_wav": f"{BASE_URL}/audio/wav/SESSION_ID",
+            "api_status": f"{BASE_URL}/api/status",
+            "api_sessions": f"{BASE_URL}/api/sessions"
         },
         "whip_whep": {
             "description": "Standard WebRTC ingestion/egress protocols for professional broadcast",
@@ -1061,8 +1073,12 @@ async def broadcast_info():
         },
         "authentication": {
             "enabled": AUTH_ENABLED,
-            "type": "HTTP Basic Auth",
-            "header": "Authorization: Basic <base64(username:password)>"
+            "type": "HTTP Basic Auth" if AUTH_ENABLED else "None",
+            "header": "Authorization: Basic <base64(username:password)>" if AUTH_ENABLED else None,
+            "username": AUTH_USER if AUTH_ENABLED else None,
+            "example_header": f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}" if AUTH_ENABLED else None,
+            "curl_example": f"curl -u '{AUTH_USER}:{AUTH_PASS}' {BASE_URL}/" if AUTH_ENABLED else f"curl {BASE_URL}/",
+            "websocket_example": f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime' -H 'Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}'" if AUTH_ENABLED else f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime'"
         },
         "latency": {
             "typical": "200-500ms end-to-end",
@@ -1218,15 +1234,30 @@ async def api_specification():
 
     This documents the WebSocket protocol for real-time translation.
     """
+    ws_url = BASE_URL.replace("https", "wss").replace("http", "ws")
+
     return JSONResponse({
         "name": "Zen Live Translation API",
         "version": "1.0.0",
         "description": "Real-time audio/video translation powered by Zen Live",
-        "websocket_endpoint": "/v1/realtime",
+        "base_url": BASE_URL,
+        "websocket_endpoint": f"{ws_url}/v1/realtime",
         "protocol": "WebSocket",
         "authentication": {
-            "type": "Bearer Token (handled by server)",
-            "note": "API key is configured server-side via API_KEY env var"
+            "http_basic": {
+                "enabled": AUTH_ENABLED,
+                "type": "HTTP Basic Auth" if AUTH_ENABLED else "None",
+                "username": AUTH_USER if AUTH_ENABLED else "Not required",
+                "header_format": "Authorization: Basic <base64(username:password)>",
+                "example": f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}" if AUTH_ENABLED else "No auth required",
+                "curl": f"curl -u '{AUTH_USER}:{AUTH_PASS}' {BASE_URL}/api/status" if AUTH_ENABLED else f"curl {BASE_URL}/api/status",
+                "websocket": f"wscat -c '{ws_url}/v1/realtime' -H 'Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}'" if AUTH_ENABLED else f"wscat -c '{ws_url}/v1/realtime'"
+            },
+            "api_key": {
+                "type": "Bearer Token (server-side)",
+                "note": "API key for Hanzo is configured server-side via API_KEY env var",
+                "configured": bool(API_KEY)
+            }
         },
         "client_events": {
             "session.update": {
@@ -1441,25 +1472,30 @@ if __name__ == "__main__":
     import uvicorn
 
     mode = os.getenv("MODE", "").upper()
-    port = int(os.getenv("PORT", 8000))
 
-    print("""
+    # Display startup banner with proper URLs
+    local_url = f"http://localhost:{PORT}"
+    prod_note = f" ({BASE_URL})" if "hanzo.ai" in BASE_URL else ""
+
+    print(f"""
     ╔═══════════════════════════════════════════════════════════╗
     ║                       ZEN LIVE                            ║
     ║         Real-time Speech Translation Service              ║
     ║                   Powered by Hanzo AI                     ║
     ╠═══════════════════════════════════════════════════════════╣
-    ║  Control Room:  http://localhost:{port:<5}                  ║
-    ║  Monitor View:  http://localhost:{port}/monitor             ║
-    ║  API Docs:      http://localhost:{port}/docs                ║
-    ║  Broadcast:     http://localhost:{port}/broadcast/info      ║
+    ║  Control Room:  {local_url:<42} ║
+    ║  Monitor View:  {local_url}/monitor{' '*(36-len(str(PORT)))} ║
+    ║  API Docs:      {local_url}/docs{' '*(39-len(str(PORT)))} ║
+    ║  Broadcast:     {local_url}/broadcast/info{' '*(27-len(str(PORT)))} ║
+    ║                                                           ║
+    ║  Production:    {BASE_URL:<42} ║
     ╚═══════════════════════════════════════════════════════════╝
-    """.format(port=port))
+    """)
 
     if mode == "UI":
         demo = enhance_ui()
-        demo.launch(server_port=port)
+        demo.launch(server_port=PORT)
     elif mode == "PHONE":
-        stream.fastphone(host="0.0.0.0", port=port)
+        stream.fastphone(host="0.0.0.0", port=PORT)
     else:
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        uvicorn.run(app, host="0.0.0.0", port=PORT)
