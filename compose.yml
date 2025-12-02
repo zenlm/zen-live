@@ -43,8 +43,8 @@ services:
       - "traefik.http.routers.zen-live-api.tls.certresolver=letsencrypt"
       - "traefik.http.routers.zen-live-api.service=zen-live"
     networks:
-      - hanzo
+      - hanzo-network
 
 networks:
-  hanzo:
+  hanzo-network:
     external: true
