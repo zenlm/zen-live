@@ -436,7 +436,12 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         # Send to cloud
         frame_resized = cv2.resize(frame, (640, 360))
         _, buf = cv2.imencode(".jpg", frame_resized, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        img_b64 = base64.b64encode(buf.tobytes()).decode()
+        jpeg_bytes = buf.tobytes()
+        img_b64 = base64.b64encode(jpeg_bytes).decode()
+
+        # Publish to video stream subscribers for remote viewers
+        if self.session_id:
+            await publish_video_to_subscribers(jpeg_bytes, self.session_id)
 
         await self.connection.send(
             json.dumps(
@@ -539,13 +544,13 @@ stream = Stream(
     LiveTranslateHandler(),
     mode="send-receive",
     modality="audio-video",
-    # modality="audio",
     additional_inputs=[src_language, language, voice, chatbot],
     additional_outputs=[chatbot],
     additional_outputs_handler=update_chatbot,
     rtc_configuration=rtc_config,
-    concurrency_limit=5 if get_space() else None,
-    time_limit=90 if get_space() else None,
+    # High limits - FastRTC treats None as 1, so set explicit high values
+    concurrency_limit=1000,
+    time_limit=86400,  # 24 hours
 )
 
 # Frontend UI customization
@@ -1080,10 +1085,42 @@ async def monitor_page(request: Request, _auth: bool = Depends(optional_auth)):
     return HTMLResponse(content=html_content)
 
 
+@app.get("/view")
+async def viewer_page(request: Request, session: str = None):
+    """
+    Remote viewer page - same as main page but in view-only mode.
+    Share link: /view?session=SESSION_ID
+    No authentication required for viewers.
+    """
+    rtc_config = await get_cloudflare_turn_credentials_async() if get_space() else None
+    html_content = (cur_dir / "index.html").read_text()
+    html_content = html_content.replace("__RTC_CONFIGURATION__", json.dumps(rtc_config))
+    return HTMLResponse(content=html_content)
+
+
 # Audio streaming for broadcast integration (can be ingested via NDI/SDI converters)
 audio_subscribers = {}  # webrtc_id -> list of asyncio.Queue
 # Global audio publisher for broadcast - publishes to all subscribers
 all_audio_subscribers = []  # list of asyncio.Queue for /audio/broadcast
+
+# Video streaming for remote viewers
+video_subscribers = {}  # session_id -> list of asyncio.Queue
+
+
+async def publish_video_to_subscribers(frame_jpeg: bytes, session_id: str):
+    """Publish video frame to HTTP stream subscribers."""
+    if session_id and session_id in video_subscribers:
+        for queue in video_subscribers[session_id]:
+            try:
+                # Replace old frame - only keep latest
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                    except:
+                        break
+                queue.put_nowait(frame_jpeg)
+            except asyncio.QueueFull:
+                pass  # Drop if queue is full
 
 
 async def publish_audio_to_subscribers(audio_data: bytes, webrtc_id: str = None):
@@ -1241,6 +1278,52 @@ async def audio_broadcast_stream():
     )
 
 
+@app.get("/video/stream/{session_id}")
+async def video_stream(session_id: str):
+    """
+    MJPEG video stream for remote viewers.
+
+    Streams the source video as Motion JPEG for low-latency viewing.
+    Can be embedded in <img> tags or used with video players.
+
+    Usage:
+        <img src="/video/stream/SESSION_ID">
+        ffplay -f mjpeg http://host/video/stream/SESSION_ID
+    """
+    async def generate_mjpeg():
+        queue = asyncio.Queue(maxsize=5)  # Small buffer for low latency
+        if session_id not in video_subscribers:
+            video_subscribers[session_id] = []
+        video_subscribers[session_id].append(queue)
+
+        try:
+            while True:
+                try:
+                    jpeg_data = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    # MJPEG multipart format
+                    yield b'--frame\r\n'
+                    yield b'Content-Type: image/jpeg\r\n\r\n'
+                    yield jpeg_data
+                    yield b'\r\n'
+                except asyncio.TimeoutError:
+                    # Keep connection alive with empty boundary
+                    yield b'--frame\r\n\r\n'
+        finally:
+            if session_id in video_subscribers:
+                video_subscribers[session_id].remove(queue)
+
+    return StreamingResponse(
+        generate_mjpeg(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Access-Control-Allow-Origin": "*"
+        }
+    )
+
+
 @app.get("/broadcast/info")
 async def broadcast_info():
     """
@@ -1251,10 +1334,12 @@ async def broadcast_info():
         "endpoints": {
             "control_room_ui": f"{BASE_URL}/",
             "monitor_only": f"{BASE_URL}/monitor?autostart=1",
+            "remote_view": f"{BASE_URL}/view?session={{SESSION_ID}}",
             "webrtc_offer": f"{BASE_URL}/webrtc/offer",
             "whip_ingest": f"{BASE_URL}/whip?src_language=Spanish&target_language=English",
             "whep_consume": f"{BASE_URL}/whep",
             "transcript_sse": f"{BASE_URL}/outputs?webrtc_id={{SESSION_ID}}",
+            "video_mjpeg": f"{BASE_URL}/video/stream/{{SESSION_ID}}",
             "audio_pcm": f"{BASE_URL}/audio/stream/{{SESSION_ID}}",
             "audio_wav": f"{BASE_URL}/audio/wav/{{SESSION_ID}}",
             "audio_broadcast": f"{BASE_URL}/audio/broadcast",

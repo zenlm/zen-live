@@ -12,7 +12,7 @@
             --highlight: #fff;
             --text: #fff;
             --text-muted: #888;  /* Improved contrast from #666 */
-            --success: #fff;
+            --success: #10b981;
             --warning: #888;
             /* Spacing system - 8px base unit */
             --spacing-xs: 4px;
@@ -312,6 +312,11 @@
         .btn-stop:disabled {
             border-color: var(--text-muted);
             color: var(--text-muted);
+            cursor: not-allowed;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
             cursor: not-allowed;
         }
 
@@ -864,6 +869,18 @@
                     <button class="btn btn-stop" id="stopBtn" onclick="stopStream()" disabled>
                         Stop
                     </button>
+                    <button class="btn" id="shareBtn" onclick="shareSession()" disabled style="background: var(--accent); color: white;">
+                        Share
+                    </button>
+                </div>
+
+                <!-- Share link display -->
+                <div id="sharePanel" style="display: none; margin-bottom: 16px; padding: 12px; background: var(--surface); border-radius: 8px; border: 1px solid var(--border);">
+                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;">Share this link with remote viewers:</div>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="shareLink" readonly style="flex: 1; font-size: 0.75rem; padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                        <button class="btn" onclick="copyShareLink()" style="padding: 8px 12px; font-size: 0.75rem;">Copy</button>
+                    </div>
                 </div>
 
                 <!-- Broadcast Output Settings (collapsible) -->
@@ -987,13 +1004,18 @@
     <script type="module">
         const RTC_CONFIG = __RTC_CONFIGURATION__;
 
+        // View mode detection - /view?session=SESSION_ID
+        const urlParams = new URLSearchParams(window.location.search);
+        const viewSessionId = urlParams.get('session');
+        const isViewMode = window.location.pathname === '/view' && viewSessionId;
+
         let peerConnection = null;
-        let webrtcId = null;
+        let webrtcId = viewSessionId || null;  // Use session from URL in view mode
         let mediaStream = null;
         let audioContext = null;
         let audioAnalyser = null;
         let isStreaming = false;
-        let latencyStart = 0;
+        let lastTranscriptTime = 0;  // Track time between transcripts for latency
 
         // Audio mixer state
         let sourceGainNode = null;
@@ -1095,6 +1117,76 @@
         // Enumerate devices on page load
         enumerateDevices();
 
+        // ==========================================
+        // View Mode Initialization
+        // ==========================================
+        if (isViewMode) {
+            console.log('📺 View mode active, session:', viewSessionId);
+            initViewMode();
+        }
+
+        function initViewMode() {
+            // Update UI for view mode
+            document.querySelector('.logo').textContent = 'Zen Live - Remote View';
+
+            // Hide controls not needed for viewing
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'none';
+            document.getElementById('shareBtn').style.display = 'none';
+            document.getElementById('sharePanel').style.display = 'none';
+
+            // Hide input source selection
+            inputSource.closest('.control-group').style.display = 'none';
+            document.getElementById('micSelectGroup').style.display = 'none';
+            document.getElementById('srtInputGroup').style.display = 'none';
+
+            // Set video element to show MJPEG stream
+            videoElement.style.display = 'none';
+            const mjpegImg = document.createElement('img');
+            mjpegImg.id = 'mjpegVideo';
+            mjpegImg.src = `/video/stream/${viewSessionId}`;
+            mjpegImg.style.cssText = 'width: 100%; height: auto; max-height: 100%; object-fit: contain; background: #000; display: block; margin: auto;';
+            videoElement.parentElement.style.display = 'flex';
+            videoElement.parentElement.style.alignItems = 'center';
+            videoElement.parentElement.style.justifyContent = 'center';
+            videoElement.parentElement.appendChild(mjpegImg);
+
+            // Start listening for transcripts
+            startOutputListener();
+
+            // Update status
+            updateStatus('live');
+            connectionText.textContent = 'Viewing';
+
+            // Setup audio player
+            const audioPlayer = document.getElementById('audioOutput');
+            audioPlayer.src = `/audio/wav/${viewSessionId}`;
+
+            // Add play button for audio (browsers require user interaction)
+            const playAudioBtn = document.createElement('button');
+            playAudioBtn.className = 'btn btn-primary';
+            playAudioBtn.textContent = 'Play Audio';
+            playAudioBtn.style.marginTop = '16px';
+            playAudioBtn.onclick = () => {
+                audioPlayer.play().then(() => {
+                    playAudioBtn.textContent = 'Audio Playing';
+                    playAudioBtn.disabled = true;
+                    audioStatus.classList.add('live');
+                }).catch(err => {
+                    console.error('Audio play failed:', err);
+                    alert('Click again to play audio');
+                });
+            };
+
+            // Add to controls section
+            const controlsSection = document.querySelector('.controls-section');
+            if (controlsSection) {
+                controlsSection.appendChild(playAudioBtn);
+            }
+
+            console.log('📺 View mode initialized');
+        }
+
         async function startStream() {
             try {
                 startBtn.disabled = true;
@@ -1118,10 +1210,36 @@
 
                 // Get media based on source type
                 if (sourceType === 'camera') {
-                    mediaStream = await navigator.mediaDevices.getUserMedia({
-                        video: { width: 1280, height: 720, facingMode: 'environment' },
-                        audio: audioConstraints
-                    });
+                    // Get video and audio separately to support different devices
+                    // (e.g., webcam video + NDI audio input)
+                    try {
+                        // First get video from camera
+                        const videoStream = await navigator.mediaDevices.getUserMedia({
+                            video: { width: 1280, height: 720, facingMode: 'environment' },
+                            audio: false
+                        });
+                        console.log('📹 Camera video captured');
+
+                        // Then get audio from selected mic (may be different device)
+                        const audioStream = await navigator.mediaDevices.getUserMedia({
+                            video: false,
+                            audio: audioConstraints
+                        });
+                        console.log('🎤 Audio captured from:', selectedMic || 'default');
+
+                        // Combine into single MediaStream
+                        mediaStream = new MediaStream([
+                            ...videoStream.getVideoTracks(),
+                            ...audioStream.getAudioTracks()
+                        ]);
+                        console.log('📡 Combined stream: video tracks:', mediaStream.getVideoTracks().length, 'audio tracks:', mediaStream.getAudioTracks().length);
+                    } catch (e) {
+                        console.warn('Failed to get separate streams, falling back to combined:', e);
+                        mediaStream = await navigator.mediaDevices.getUserMedia({
+                            video: { width: 1280, height: 720 },
+                            audio: audioConstraints
+                        });
+                    }
                 } else if (sourceType === 'screen') {
                     mediaStream = await navigator.mediaDevices.getDisplayMedia({
                         video: { width: 1920, height: 1080 },
@@ -1206,10 +1324,11 @@
 
             // Handle incoming audio (translated TTS)
             peerConnection.ontrack = (event) => {
-                console.log('Received remote track:', event.track.kind);
+                console.log('🎵 Received remote track:', event.track.kind, 'streams:', event.streams.length);
                 if (event.track.kind === 'audio') {
                     // Don't play directly via audio element - use mixer instead
                     const translatedStream = event.streams[0];
+                    console.log('🎵 Translated stream:', translatedStream?.id, 'tracks:', translatedStream?.getAudioTracks().length);
 
                     // Update audio status in header
                     audioStatus.classList.add('live');
@@ -1217,9 +1336,14 @@
                     // Get audio track from local media for source mixing
                     const sourceAudioTrack = mediaStream?.getAudioTracks()[0];
                     const sourceStream = sourceAudioTrack ? new MediaStream([sourceAudioTrack]) : null;
+                    console.log('🎵 Source stream:', sourceStream?.id);
 
                     // Setup audio mixer with both streams
                     setupAudioMixer(sourceStream, translatedStream);
+                } else if (event.track.kind === 'video') {
+                    // Also handle video track
+                    videoElement.srcObject = event.streams[0];
+                    console.log('🎵 Video stream attached to element');
                 }
             };
 
@@ -1236,7 +1360,10 @@
                     updateStatus('live');
                     isStreaming = true;
                     stopBtn.disabled = false;
-                    latencyStart = Date.now();
+                    console.log('🔗 Enabling share button, webrtcId:', webrtcId);
+                    document.getElementById('shareBtn').disabled = false;  // Enable share
+                    lastTranscriptTime = 0;  // Reset latency tracking
+                    latencyHistory = [];     // Clear history
                     // Update caption labels with current languages
                     updateCaptionLabels();
                     // Start browser speech recognition for source captions
@@ -1254,7 +1381,7 @@
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
 
-            // Wait for ICE gathering
+            // Wait for ICE gathering (short timeout - trickle ICE will handle rest)
             await new Promise((resolve) => {
                 if (peerConnection.iceGatheringState === 'complete') {
                     resolve();
@@ -1262,8 +1389,8 @@
                     peerConnection.onicegatheringstatechange = () => {
                         if (peerConnection.iceGatheringState === 'complete') resolve();
                     };
-                    // Timeout fallback
-                    setTimeout(resolve, 2000);
+                    // Short timeout - don't wait too long, trickle ICE handles candidates
+                    setTimeout(resolve, 500);
                 }
             });
 
@@ -1323,31 +1450,46 @@
 
             evtSource.addEventListener('output', (e) => {
                 const data = JSON.parse(e.data);
+                console.log('📨 SSE output:', data);
                 updateTranscript(data);
 
-                // Update latency displays
+                // Update latency displays - measure time between transcript updates
                 const now = Date.now();
-                const latency = now - latencyStart;
-                if (latency > 0 && latency < 10000) {
-                    // Update sidebar latency
-                    e2eLatency.textContent = `${latency}ms`;
-                    e2eLatency.className = latency > 500 ? 'latency-value high' : 'latency-value';
 
-                    // Update header latency
-                    latencyDisplay.textContent = `Latency: ${latency}ms`;
+                // Only measure latency for translated content (assistant role), not source
+                if (data.role === 'assistant' && data.content) {
+                    console.log('📊 Latency check - lastTime:', lastTranscriptTime, 'now:', now);
+                    if (lastTranscriptTime > 0) {
+                        const latency = now - lastTranscriptTime;
+                        console.log('📊 Calculated latency:', latency, 'ms');
+                        // Only show reasonable latencies (between 50ms and 10s)
+                        if (latency > 50 && latency < 10000) {
+                            // Update sidebar latency
+                            e2eLatency.textContent = `${latency}ms`;
+                            e2eLatency.className = latency > 3000 ? 'latency-value high' : 'latency-value';
 
-                    // Track for average
-                    latencyHistory.push(latency);
-                    if (latencyHistory.length > 10) latencyHistory.shift();
+                            // Update header latency
+                            latencyDisplay.textContent = `${latency}ms`;
 
-                    // Calculate and show average
-                    const avg = Math.round(latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length);
-                    avgLatencyEl.textContent = `${avg}ms`;
-                    avgLatencyEl.className = avg > 500 ? 'latency-value high' : 'latency-value';
+                            // Track for average
+                            latencyHistory.push(latency);
+                            if (latencyHistory.length > 10) latencyHistory.shift();
 
-                    // Update header avg latency
-                    const headerAvg = document.getElementById('headerAvgLatency');
-                    if (headerAvg) headerAvg.textContent = `${avg}ms`;
+                            // Calculate and show average
+                            const avg = Math.round(latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length);
+                            avgLatencyEl.textContent = `${avg}ms`;
+                            avgLatencyEl.className = avg > 3000 ? 'latency-value high' : 'latency-value';
+
+                            // Update header avg latency
+                            const headerAvg = document.getElementById('headerAvgLatency');
+                            if (headerAvg) headerAvg.textContent = `${avg}ms`;
+                        }
+                    } else {
+                        // First transcript - show measuring indicator
+                        e2eLatency.textContent = '...';
+                        latencyDisplay.textContent = '...';
+                    }
+                    lastTranscriptTime = now;
                 }
             });
 
@@ -1738,6 +1880,30 @@
             updateStatus('disconnected');
             startBtn.disabled = false;
             stopBtn.disabled = true;
+
+            // Hide share panel and disable share button
+            document.getElementById('shareBtn').disabled = true;
+            document.getElementById('sharePanel').style.display = 'none';
+        }
+
+        function shareSession() {
+            if (!webrtcId) {
+                alert('Start a session first to generate a share link');
+                return;
+            }
+
+            const shareUrl = `${window.location.origin}/view?session=${webrtcId}`;
+            document.getElementById('shareLink').value = shareUrl;
+            document.getElementById('sharePanel').style.display = 'block';
+        }
+
+        function copyShareLink() {
+            const shareLink = document.getElementById('shareLink');
+            shareLink.select();
+            document.execCommand('copy');
+
+            // Show feedback
+            showNotification('Share link copied to clipboard!');
         }
 
         function updateStatus(status) {
@@ -1780,6 +1946,8 @@
 
         window.startStream = startStream;
         window.stopStream = stopStream;
+        window.shareSession = shareSession;
+        window.copyShareLink = copyShareLink;
 
         // ==========================================
         // Language Change Handler
@@ -1887,6 +2055,13 @@
                 audioContext = new AudioContext();
             }
 
+            // Resume audio context if suspended (browser autoplay policy)
+            if (audioContext.state === 'suspended') {
+                audioContext.resume().then(() => {
+                    console.log('🔊 AudioContext resumed');
+                });
+            }
+
             // Create gain nodes for volume control
             sourceGainNode = audioContext.createGain();
             translatedGainNode = audioContext.createGain();
@@ -1899,6 +2074,7 @@
                 const sourceNode = audioContext.createMediaStreamSource(sourceStream);
                 sourceNode.connect(sourceGainNode);
                 sourceGainNode.connect(mixerDestination);
+                console.log('🔊 Source audio connected to mixer');
             }
 
             // Connect translated audio
@@ -1906,14 +2082,18 @@
                 const translatedNode = audioContext.createMediaStreamSource(translatedStream);
                 translatedNode.connect(translatedGainNode);
                 translatedGainNode.connect(mixerDestination);
+                console.log('🔊 Translated audio connected to mixer');
 
                 // Also setup visualization on translated audio
                 audioAnalyser = audioContext.createAnalyser();
                 translatedNode.connect(audioAnalyser);
+            } else {
+                console.warn('⚠️ No translated stream received for audio mixer');
             }
 
             // Apply initial mode
             applyAudioMode();
+            console.log(`🔊 Audio mode: ${audioMode}, translated gain: ${translatedGainNode?.gain.value}`);
         }
 
         // Keyboard shortcuts for control room
@@ -2187,13 +2367,14 @@
                 bottom: 80px;
                 left: 50%;
                 transform: translateX(-50%);
-                background: var(--success);
+                background: #10b981;
                 color: white;
                 padding: 12px 24px;
                 border-radius: 6px;
                 font-weight: 600;
                 z-index: 10000;
                 animation: fadeInOut 2s ease-in-out;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
             `;
             notification.textContent = message;
             document.body.appendChild(notification);
