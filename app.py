@@ -1315,8 +1315,6 @@ async def api_specification():
 # WebSocket Proxy for ASR
 # =============================================================================
 
-ASR_API_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
-
 
 @app.websocket("/v1/asr")
 async def asr_websocket_proxy(websocket: WebSocket):
