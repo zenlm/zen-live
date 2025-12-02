@@ -1383,7 +1383,7 @@
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
 
-            // Wait for ICE gathering (short timeout - trickle ICE will handle rest)
+            // Wait for ICE gathering (minimal timeout - trickle ICE handles rest)
             await new Promise((resolve) => {
                 if (peerConnection.iceGatheringState === 'complete') {
                     resolve();
@@ -1391,8 +1391,8 @@
                     peerConnection.onicegatheringstatechange = () => {
                         if (peerConnection.iceGatheringState === 'complete') resolve();
                     };
-                    // Short timeout - don't wait too long, trickle ICE handles candidates
-                    setTimeout(resolve, 500);
+                    // Minimal timeout - trickle ICE handles candidates
+                    setTimeout(resolve, 150);
                 }
             });
 

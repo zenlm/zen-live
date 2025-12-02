@@ -236,8 +236,8 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             input_sample_rate=16_000,
         )
         self.connection = None
-        self.output_queue = asyncio.Queue()
-        self.video_queue = asyncio.Queue()
+        self.output_queue = asyncio.Queue(maxsize=100)
+        self.video_queue = asyncio.Queue(maxsize=10)
 
         self.last_send_time = 0.0     # Last send timestamp
         self.video_interval = 0.5     # Interval in seconds (match reference: 2fps for context)
@@ -427,11 +427,16 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         if self.connection is None:
             return
 
-        # Push frame to local queue for display immediately (non-blocking)
+        # Push frame to local queue for display - drop oldest if full (keep newest)
+        while self.video_queue.full():
+            try:
+                self.video_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
         try:
             self.video_queue.put_nowait(frame)
         except asyncio.QueueFull:
-            pass  # Drop frame if queue full
+            pass
 
         now = time.time()
         if now - self.last_send_time < self.video_interval:
@@ -441,15 +446,19 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         # Process video in background task to not block audio
         asyncio.create_task(self._send_video_frame(frame))
 
+    def _encode_frame_sync(self, frame: np.ndarray) -> bytes:
+        """CPU-bound frame encoding - runs in thread pool."""
+        frame_resized = cv2.resize(frame, (640, 360))
+        _, buf = cv2.imencode(".jpg", frame_resized, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        return buf.tobytes()
+
     async def _send_video_frame(self, frame: np.ndarray):
         """Send video frame to API - runs in background to not block audio."""
         try:
             if self.connection is None:
                 return
-            # Resize and encode (CPU-bound work)
-            frame_resized = cv2.resize(frame, (640, 360))
-            _, buf = cv2.imencode(".jpg", frame_resized, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-            jpeg_bytes = buf.tobytes()
+            # Run CPU-bound encoding in thread pool to not block event loop
+            jpeg_bytes = await asyncio.to_thread(self._encode_frame_sync, frame)
             img_b64 = base64.b64encode(jpeg_bytes).decode()
 
             # Publish to video stream subscribers for remote viewers
@@ -460,7 +469,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             msg = f'{{"event_id":"evt_{self._msg_counter}","type":"input_image_buffer.append","image":"{img_b64}"}}'
             self._msg_counter += 1
             await self.connection.send(msg)
-        except Exception as e:
+        except Exception:
             pass  # Don't let video errors affect audio
 
     # Server -> Client: emit video frame
@@ -487,14 +496,27 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
     async def shutdown(self) -> None:
         """Close connection and cleanup resources"""
+        # Cleanup registries
+        if self.session_id:
+            handler_registry.pop(self.session_id, None)
+            audio_subscribers.pop(self.session_id, None)
+            video_subscribers.pop(self.session_id, None)
 
         if self.connection:
             await self.connection.close()
             self.connection = None
 
-        # Clear queue
+        # Clear queues
         while not self.output_queue.empty():
-            self.output_queue.get_nowait()
+            try:
+                self.output_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        while not self.video_queue.empty():
+            try:
+                self.video_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
 
 def update_chatbot(chatbot: list[dict], response: dict):
@@ -1162,7 +1184,7 @@ async def audio_stream(webrtc_id: str):
            -c:a aac -f mpegts srt://dest:port
     """
     async def generate_audio():
-        queue = asyncio.Queue()
+        queue = asyncio.Queue(maxsize=50)  # ~2 seconds of audio buffer
         if webrtc_id not in audio_subscribers:
             audio_subscribers[webrtc_id] = []
         audio_subscribers[webrtc_id].append(queue)
@@ -1177,7 +1199,10 @@ async def audio_stream(webrtc_id: str):
                     yield b'\x00' * 4800  # 100ms of silence at 24kHz
         finally:
             if webrtc_id in audio_subscribers:
-                audio_subscribers[webrtc_id].remove(queue)
+                try:
+                    audio_subscribers[webrtc_id].remove(queue)
+                except ValueError:
+                    pass  # Already removed
 
     return StreamingResponse(
         generate_audio(),
@@ -1218,7 +1243,7 @@ async def audio_wav_stream(webrtc_id: str):
         ])
         yield wav_header
 
-        queue = asyncio.Queue()
+        queue = asyncio.Queue(maxsize=50)  # ~2 seconds of audio buffer
         if webrtc_id not in audio_subscribers:
             audio_subscribers[webrtc_id] = []
         audio_subscribers[webrtc_id].append(queue)
@@ -1232,7 +1257,10 @@ async def audio_wav_stream(webrtc_id: str):
                     yield b'\x00' * 4800
         finally:
             if webrtc_id in audio_subscribers:
-                audio_subscribers[webrtc_id].remove(queue)
+                try:
+                    audio_subscribers[webrtc_id].remove(queue)
+                except ValueError:
+                    pass
 
     return StreamingResponse(
         generate_wav(),
