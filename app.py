@@ -2,16 +2,16 @@
 Zen Live - Real-time Speech Translation for Broadcast
 
 A low-latency simultaneous translation service for news control rooms.
-Powered by Hanzo AI infrastructure with Qwen3 LiveTranslate backend.
+Powered by Hanzo AI infrastructure with Zen Omni backend.
 
 Backend options:
   1. Hanzo Node API (recommended) - Set HANZO_NODE_URL
-  2. Direct DashScope API - Set API_KEY
+  2. Direct Hanzo API - Set API_KEY
   3. Local Zen Omni model - Set ZEN_OMNI_PATH
 
 Usage:
   export HANZO_NODE_URL=http://localhost:9550  # or
-  export API_KEY=your_dashscope_key
+  export API_KEY=your_hanzo_key
   python app.py
 
 Endpoints:
@@ -49,6 +49,7 @@ from fastrtc import (
     get_cloudflare_turn_credentials_async,
     wait_for_item,
 )
+from fastrtc.stream import Body as RTCBody
 from gradio.utils import get_space
 from websockets.asyncio.client import connect
 import ssl
@@ -63,7 +64,7 @@ cur_dir = Path(__file__).parent
 
 # Backend configuration
 HANZO_NODE_URL = os.environ.get("HANZO_NODE_URL")  # Preferred: Hanzo Node backend
-API_KEY = os.environ.get("API_KEY")  # Fallback: Direct DashScope API
+API_KEY = os.environ.get("API_KEY")  # Fallback: Direct Hanzo API
 ZEN_OMNI_PATH = os.environ.get("ZEN_OMNI_PATH")  # Optional: Local model path
 
 # Authentication (optional - set both to enable)
@@ -146,8 +147,8 @@ if HANZO_NODE_URL:
     print(f"🔗 Zen Live: Using Hanzo Node backend at {HANZO_NODE_URL}")
     BACKEND_TYPE = "hanzo_node"
 elif API_KEY:
-    print("🔗 Zen Live: Using direct DashScope API")
-    BACKEND_TYPE = "dashscope"
+    print("🔗 Zen Live: Using direct Hanzo API")
+    BACKEND_TYPE = "hanzo_api"
 else:
     print("⚠️  Zen Live: No backend configured")
     print("   Set HANZO_NODE_URL (recommended) or API_KEY")
@@ -185,6 +186,7 @@ TARGET_LANGUAGES = [LANG_MAP[code] for code in ["en", "zh", "ru", "fr", "de", "p
 
 class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
     def __init__(self) -> None:
+        print("🔧 LiveTranslateHandler.__init__() called")
         super().__init__(
             expected_layout="mono",
             output_sample_rate=24_000,
@@ -201,9 +203,14 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         self.awaiting_new_message = True
         self.stable_text = ""  # 黑色部分
         self.temp_text = ""    # 灰色部分
+        # Source language transcript (English input)
+        self.source_text = ""
+        self.source_temp = ""
+        print("🔧 LiveTranslateHandler.__init__() complete")
 
 
     def copy(self):
+        print("🔧 LiveTranslateHandler.copy() called - creating new handler instance")
         return LiveTranslateHandler()
 
     @staticmethod
@@ -212,48 +219,85 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
     async def start_up(self):
         try:
-            await self.wait_for_args()
-            args = self.latest_args
-            src_language_name = args[2] if len(args) > 2 else "Chinese" # 现在 dropdown 返回的是全称
-            target_language_name = args[3] if  len(args) > 3 else "English" 
-            src_language_code = LANG_MAP_REVERSE[src_language_name]
-            target_language_code = LANG_MAP_REVERSE[target_language_name]
+            # Use current_session_config (set by /api/webrtc/offer endpoint)
+            # This works for single-instance mode where only one stream is active
+            print(f"🎤 Handler starting with current_session_config: {current_session_config}")
 
-            voice_id = args[4] if len(args) > 4 else "Cherry"
-            
+            src_language_name = current_session_config.get("src_language", "Spanish")
+            target_language_name = current_session_config.get("target_language", "English")
+            voice_id = current_session_config.get("voice", "Cherry")
+
+            src_language_code = LANG_MAP_REVERSE.get(src_language_name, "en")
+            target_language_code = LANG_MAP_REVERSE.get(target_language_name, "es")
+
+            print(f"🌐 Translation: {src_language_name} ({src_language_code}) -> {target_language_name} ({target_language_code}), Voice: {voice_id}")
+
             if src_language_code == target_language_code:
                 print(f"⚠️ 源语言和目标语言相同({target_language_name})，将以复述模式运行")
 
+            print(f"🔌 Connecting to Hanzo WebSocket: {API_URL[:50]}...")
             async with connect(API_URL, additional_headers=headers, ssl=ssl_context) as conn:
+                print("✅ Hanzo WebSocket connected!")
                 self.client = conn
-                await conn.send(
-                    json.dumps(
-                        {
-                            "event_id": self.msg_id(),
-                            "type": "session.update", 
-                            "session": {
-                                "modalities": ["text", "audio"],
-                                "voice": voice_id,
-                                "input_audio_format": "pcm16",
-                                "output_audio_format": "pcm16",
-                                "translation": {
-                                    "source_language": src_language_code,  # 添加源语言
-                                    "language": target_language_code
-                                }
-                            },
+                session_update_msg = {
+                    "event_id": self.msg_id(),
+                    "type": "session.update",
+                    "session": {
+                        "modalities": ["text", "audio"],
+                        "voice": voice_id,
+                        "input_audio_format": "pcm16",
+                        "output_audio_format": "pcm16",
+                        "input_audio_transcription": {
+                            "language": src_language_code
+                        },
+                        "translation": {
+                            "source_language": src_language_code,
+                            "language": target_language_code
                         }
-                    )
-                )
+                    },
+                }
+                print(f"📤 Sending session.update: {json.dumps(session_update_msg, indent=2)}")
+                await conn.send(json.dumps(session_update_msg))
                 self.connection = conn
+                print("🎧 Now listening for Hanzo responses...")
 
                 # WebSocket 收到的每一个响应（data）是一个 JSON 事件，表示翻译任务的进展。
                 async for data in self.connection:
+                    print(f"📨 Hanzo response: {data[:200]}..." if len(data) > 200 else f"📨 Hanzo response: {data}")
                     event = json.loads(data)
                     if "type" not in event:
                         continue
                     event_type = event["type"]
 
-                    if event_type in ("response.text.text", "response.audio_transcript.text"):
+                    # Handle source language transcription (input)
+                    if event_type in ("input_audio_transcript.delta", "input_audio_transcript.text"):
+                        self.source_text = event.get("text", "") or ""
+                        self.source_temp = event.get("stash", "") or ""
+                        print(f"[SOURCE] {self.source_text} {self.source_temp}")
+                        # Send source transcript to client
+                        await self.output_queue.put(
+                            AdditionalOutputs({
+                                "role": "source",
+                                "source_content": f"{self.source_text}{self.source_temp}",
+                                "update": True
+                            })
+                        )
+
+                    elif event_type == "input_audio_transcript.done":
+                        transcript = event.get("transcript", "")
+                        print(f"[SOURCE DONE] {transcript}")
+                        if transcript:
+                            self.source_text = transcript
+                            self.source_temp = ""
+                            await self.output_queue.put(
+                                AdditionalOutputs({
+                                    "role": "source",
+                                    "source_content": transcript,
+                                    "update": True
+                                })
+                            )
+
+                    elif event_type in ("response.text.text", "response.audio_transcript.text"):
                         # 更新稳定部分（stash / text 认为是已确认的）
                         self.stable_text = event.get("text", "") or ""
                         self.temp_text = event.get("stash", "") or ""
@@ -301,7 +345,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                             await self.output_queue.put(
                                 (self.output_sample_rate, audio_array)
                             )
-              
+
 
         except Exception as e:
             print(f"Connection error: {e}")
@@ -309,12 +353,13 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
     # 客户端 to 服务端
     async def video_receive(self, frame: np.ndarray):
+        print(f"📹 Receiving video frame, shape: {frame.shape}, connection: {self.connection is not None}")
         self.latest_frame = frame
         if self.connection is None:
             return
 
         # Push frame to local queue for display immediately
-        await self.video_queue.put(frame)  
+        await self.video_queue.put(frame)
 
         now = time.time()
         if now - self.last_send_time < self.video_interval:
@@ -351,6 +396,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
 
     async def receive(self, frame):
+        print(f"📥 Receiving audio frame, connection: {self.connection is not None}")
         if self.connection is None:
             return
         sr, array = frame          # frame 一定是 (sr, np.ndarray)
@@ -562,11 +608,13 @@ class WebRTCOffer(BaseModel):
     type: str
     src_language: str = "Spanish"
     target_language: str = "English"
-    voice: str = "Cherry"
+    voice: str = "Nofish"
 
 
 # Store active sessions for control room
 active_sessions = {}
+# Current session config for single-instance mode (most recent session)
+current_session_config = {"src_language": "Spanish", "target_language": "English", "voice": "Nofish"}
 
 
 @app.post("/api/webrtc/offer")
@@ -576,6 +624,7 @@ async def webrtc_offer(offer: WebRTCOffer):
     This endpoint receives SDP offers and returns SDP answers
     for establishing low-latency WebRTC connections.
     """
+    global current_session_config
     try:
         # Generate session ID
         session_id = secrets.token_hex(16)
@@ -588,25 +637,60 @@ async def webrtc_offer(offer: WebRTCOffer):
             "created_at": time.time()
         }
 
-        # Use FastRTC's internal offer handling
-        response = await stream.offer(
-            offer.sdp,
-            offer.type
-        )
+        # Also set as current session for single-instance mode
+        current_session_config = {
+            "src_language": offer.src_language,
+            "target_language": offer.target_language,
+            "voice": offer.voice
+        }
+        print(f"📡 WebRTC offer received: {offer.src_language} -> {offer.target_language}, voice: {offer.voice}")
 
-        # Handle response - ensure required fields are present
-        if isinstance(response, dict):
+        # Use FastRTC's internal offer handling with proper Body object
+        rtc_body = RTCBody(
+            sdp=offer.sdp,
+            type=offer.type,
+            webrtc_id=session_id,
+            candidate=None
+        )
+        print(f"📤 Calling stream.offer with session_id: {session_id}")
+        response = await stream.offer(rtc_body)
+        print(f"📥 stream.offer response type: {type(response)}")
+        print(f"📥 stream.offer response: {response}")
+
+        # Handle response - FastRTC returns dict on success, JSONResponse on error
+        if isinstance(response, JSONResponse):
+            # FastRTC returned an error response, pass it through
+            print(f"📥 FastRTC returned JSONResponse (error case)")
+            return response
+        elif isinstance(response, dict):
             sdp = response.get("sdp", "")
             resp_type = response.get("type", "answer")
-            webrtc_id = response.get("webrtc_id", session_id)
+            webrtc_id = session_id
         else:
-            # If response is RTCSessionDescription or similar object
-            sdp = getattr(response, "sdp", str(response))
-            resp_type = getattr(response, "type", "answer")
+            # Unexpected response type - try to handle it
+            print(f"⚠️ Unexpected response type: {type(response)}")
+            if hasattr(response, 'body'):
+                # It might be a Response object
+                import json
+                body = response.body.decode() if isinstance(response.body, bytes) else response.body
+                try:
+                    data = json.loads(body)
+                    if 'error' in data or 'status' in data:
+                        return response
+                    sdp = data.get("sdp", "")
+                    resp_type = data.get("type", "answer")
+                except:
+                    sdp = ""
+                    resp_type = "answer"
+            else:
+                sdp = getattr(response, "sdp", "")
+                resp_type = getattr(response, "type", "answer")
             webrtc_id = session_id
 
+        print(f"📥 Extracted SDP (first 200 chars): {sdp[:200] if sdp else 'EMPTY'}")
+
         if not sdp:
-            raise ValueError("No SDP in response")
+            raise ValueError("No SDP in response - FastRTC may have returned an error")
 
         return JSONResponse({
             "sdp": sdp,
@@ -687,16 +771,15 @@ async def whip_ingest(
     }
 
     try:
-        # Use FastRTC's internal offer handling
-        response = await stream.offer(
-            sdp,
-            "offer",
-            extra_data={
-                "src_language": src_language,
-                "target_language": target_language,
-                "voice": voice
-            }
+        # Use FastRTC's internal offer handling with proper Body object
+        whip_session_id = secrets.token_hex(16)
+        rtc_body = RTCBody(
+            sdp=sdp,
+            type="offer",
+            webrtc_id=whip_session_id,
+            candidate=None
         )
+        response = await stream.offer(rtc_body)
 
         # Return SDP answer per WHIP spec
         return StreamingResponse(
@@ -764,8 +847,14 @@ async def whep_consume(
     consumer_id = secrets.token_hex(16)
 
     try:
-        # Create answer for consumer
-        response = await stream.offer(sdp, "offer")
+        # Create answer for consumer with proper Body object
+        rtc_body = RTCBody(
+            sdp=sdp,
+            type="offer",
+            webrtc_id=consumer_id,
+            candidate=None
+        )
+        response = await stream.offer(rtc_body)
 
         return StreamingResponse(
             content=response["sdp"],
@@ -833,14 +922,14 @@ audio_subscribers = {}  # webrtc_id -> list of asyncio.Queue
 async def audio_stream(webrtc_id: str):
     """
     Raw PCM audio stream for broadcast integration.
-    
+
     This endpoint streams translated audio as raw PCM16 at 24kHz.
     Can be converted to SDI/NDI using tools like:
     - ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID -f alsa default
     - OBS with browser source + audio capture
     - Blackmagic Web Presenter
     - NDI Tools with HTTP input
-    
+
     For SRT output, pipe through:
     ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID \
            -c:a aac -f mpegts srt://dest:port
@@ -850,7 +939,7 @@ async def audio_stream(webrtc_id: str):
         if webrtc_id not in audio_subscribers:
             audio_subscribers[webrtc_id] = []
         audio_subscribers[webrtc_id].append(queue)
-        
+
         try:
             while True:
                 try:
@@ -879,7 +968,7 @@ async def audio_stream(webrtc_id: str):
 async def audio_wav_stream(webrtc_id: str):
     """
     WAV-wrapped audio stream for easier playback/ingestion.
-    
+
     Includes WAV header for compatibility with more players/converters.
     Useful for direct monitoring or conversion to broadcast formats.
     """
@@ -901,12 +990,12 @@ async def audio_wav_stream(webrtc_id: str):
             0xFF, 0xFF, 0xFF, 0x7F,  # Subchunk2Size (max)
         ])
         yield wav_header
-        
+
         queue = asyncio.Queue()
         if webrtc_id not in audio_subscribers:
             audio_subscribers[webrtc_id] = []
         audio_subscribers[webrtc_id].append(queue)
-        
+
         try:
             while True:
                 try:
@@ -1003,10 +1092,10 @@ def _(webrtc_id: str):
 
 
 # =============================================================================
-# WebSocket Proxy API - Proxies to DashScope qwen3-livetranslate-flash-realtime
+# WebSocket Proxy API - Proxies to Hanzo
 # =============================================================================
 
-# Full language support per DashScope docs
+# Full language support per Hanzo docs
 SUPPORTED_LANGUAGES = {
     "en": {"name": "English", "audio": True},
     "zh": {"name": "Chinese", "audio": True},
@@ -1028,7 +1117,7 @@ SUPPORTED_LANGUAGES = {
     "tr": {"name": "Turkish", "audio": False},  # Text only
 }
 
-# Full voice support per DashScope docs
+# Full voice support per Hanzo docs
 SUPPORTED_VOICES = {
     "Cherry": {"description": "Sunny, positive, friendly female", "languages": ["zh", "en", "fr", "de", "ru", "it", "es", "pt", "ja", "ko"]},
     "Nofish": {"description": "Designer voice, casual male", "languages": ["zh", "en", "fr", "de", "ru", "it", "es", "pt", "ja", "ko"]},
@@ -1044,11 +1133,10 @@ SUPPORTED_VOICES = {
 @app.websocket("/v1/realtime")
 async def websocket_proxy(websocket: WebSocket):
     """
-    WebSocket proxy to DashScope qwen3-livetranslate-flash-realtime.
+    WebSocket proxy to Hanzo
 
-    This endpoint proxies all WebSocket messages to DashScope's real-time
-    translation API, allowing clients to use api.zen-live.hanzo.ai as
-    a drop-in replacement for dashscope-intl.aliyuncs.com.
+    This endpoint proxies all WebSocket messages to Hanzo's real-time
+    translation API.
 
     Client Events (send to server):
     - session.update: Configure session (language, voice, modalities)
@@ -1075,7 +1163,7 @@ async def websocket_proxy(websocket: WebSocket):
 
     upstream_ws = None
     try:
-        # Connect to DashScope
+        # Connect to Hanzo
         upstream_ws = await connect(
             API_URL,
             additional_headers={"Authorization": f"Bearer {API_KEY}"},
@@ -1083,7 +1171,7 @@ async def websocket_proxy(websocket: WebSocket):
         )
 
         async def forward_to_upstream():
-            """Forward client messages to DashScope."""
+            """Forward client messages to Hanzo."""
             try:
                 while True:
                     data = await websocket.receive_text()
@@ -1094,7 +1182,7 @@ async def websocket_proxy(websocket: WebSocket):
                 print(f"Client->Upstream error: {e}")
 
         async def forward_to_client():
-            """Forward DashScope responses to client."""
+            """Forward Hanzo responses to client."""
             try:
                 async for message in upstream_ws:
                     await websocket.send_text(message)
@@ -1125,14 +1213,14 @@ async def websocket_proxy(websocket: WebSocket):
 @app.get("/api/spec")
 async def api_specification():
     """
-    Full API specification for qwen3-livetranslate-flash-realtime.
+    Full API specification for Zen Live.
 
     This documents the WebSocket protocol for real-time translation.
     """
     return JSONResponse({
         "name": "Zen Live Translation API",
         "version": "1.0.0",
-        "description": "Real-time audio/video translation powered by Qwen3 LiveTranslate",
+        "description": "Real-time audio/video translation powered by Zen Live",
         "websocket_endpoint": "/v1/realtime",
         "protocol": "WebSocket",
         "authentication": {
@@ -1220,6 +1308,89 @@ async def api_specification():
             "github": "https://github.com/zenlm/zen-live"
         }
     })
+
+
+# =============================================================================
+# WebSocket Proxy for ASR
+# =============================================================================
+
+ASR_API_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
+
+
+@app.websocket("/v1/asr")
+async def asr_websocket_proxy(websocket: WebSocket):
+    """
+    WebSocket proxy to Hanzo.
+
+    This endpoint proxies ASR requests to Hanzo's real-time ASR API,
+    keeping the API key secure on the server side.
+
+    Client sends:
+    - session.update: Configure ASR session (language, model)
+    - input_audio_buffer.append: Send Base64-encoded PCM16 audio
+
+    Server returns:
+    - session.created/updated: Session confirmations
+    - conversation.item.input_audio_transcription.text: Interim transcription
+    - conversation.item.input_audio_transcription.completed: Final transcription
+    - input_audio_buffer.speech_started/stopped: VAD events
+    - error: Error details
+    """
+    if not API_KEY:
+        await websocket.close(code=4001, reason="API_KEY not configured")
+        return
+
+    await websocket.accept()
+
+    upstream_ws = None
+    try:
+        # Connect to Hanzo ASR endpoint
+        upstream_ws = await connect(
+            ASR_API_URL,
+            additional_headers={"Authorization": f"Bearer {API_KEY}"},
+            ssl=ssl_context
+        )
+        print("🎙️ ASR WebSocket proxy connected to Hanzo")
+
+        async def forward_to_upstream():
+            """Forward client messages to Hanzo ASR."""
+            try:
+                while True:
+                    data = await websocket.receive_text()
+                    await upstream_ws.send(data)
+            except WebSocketDisconnect:
+                pass
+            except Exception as e:
+                print(f"ASR Client->Upstream error: {e}")
+
+        async def forward_to_client():
+            """Forward Hanzo ASR responses to client."""
+            try:
+                async for message in upstream_ws:
+                    await websocket.send_text(message)
+            except Exception as e:
+                print(f"ASR Upstream->Client error: {e}")
+
+        # Run both directions concurrently
+        await asyncio.gather(
+            forward_to_upstream(),
+            forward_to_client(),
+            return_exceptions=True
+        )
+
+    except Exception as e:
+        print(f"ASR WebSocket proxy error: {e}")
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "error": {"message": str(e), "type": "asr_proxy_error"}
+            }))
+        except:
+            pass
+    finally:
+        if upstream_ws:
+            await upstream_ws.close()
+        print("🎙️ ASR WebSocket proxy disconnected")
 
 
 @app.get("/api/languages")

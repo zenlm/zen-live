@@ -11,9 +11,15 @@
             --accent: #333;
             --highlight: #fff;
             --text: #fff;
-            --text-muted: #666;
+            --text-muted: #888;  /* Improved contrast from #666 */
             --success: #fff;
             --warning: #888;
+            /* Spacing system - 8px base unit */
+            --spacing-xs: 4px;
+            --spacing-sm: 8px;
+            --spacing-md: 16px;
+            --spacing-lg: 24px;
+            --spacing-xl: 32px;
         }
 
         * {
@@ -119,8 +125,20 @@
             position: relative;
             background: #000;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
+            overflow: hidden;
+            padding-bottom: 120px; /* Space for fixed caption overlay */
+        }
+
+        .video-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            min-height: 0;
         }
 
         #videoElement {
@@ -130,12 +148,19 @@
         }
 
         .video-overlay {
-            position: absolute;
+            position: fixed;
             bottom: 0;
             left: 0;
-            right: 0;
-            background: linear-gradient(transparent, rgba(0,0,0,0.8));
-            padding: 40px 24px 24px;
+            width: calc(100% - 400px); /* Exclude sidebar width */
+            background: rgba(0,0,0,0.9);
+            padding: 16px 24px;
+            z-index: 100;
+            backdrop-filter: blur(8px);
+        }
+
+        /* Monitor mode - full width overlay */
+        body.monitor-mode .video-overlay {
+            width: 100%;
         }
 
         .live-caption {
@@ -152,6 +177,24 @@
         .live-caption .interim {
             color: #aaa;
             font-style: italic;
+        }
+
+        .source-caption {
+            font-size: 1rem;
+            line-height: 1.4;
+            color: #888;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .source-caption .label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #666;
+            margin-right: 8px;
         }
 
         .sidebar {
@@ -186,9 +229,9 @@
 
         label {
             display: block;
-            font-size: 0.8rem;
+            font-size: 0.9rem;  /* Improved from 0.8rem for accessibility */
             color: var(--text-muted);
-            margin-bottom: 6px;
+            margin-bottom: var(--spacing-sm);
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
@@ -325,6 +368,128 @@
             transition: width 0.1s;
         }
 
+        /* Audio Mixer Styles */
+        .audio-mixer {
+            padding: 16px;
+            border-top: 1px solid var(--accent);
+            background: var(--bg-panel);
+        }
+
+        .mixer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .mixer-header label {
+            margin-bottom: 0;
+        }
+
+        .mixer-toggle {
+            display: flex;
+            gap: 4px;
+        }
+
+        .mixer-toggle button {
+            padding: 4px 10px;
+            font-size: 0.75rem;
+            border: 1px solid var(--accent);
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mixer-toggle button:first-child {
+            border-radius: 4px 0 0 4px;
+        }
+
+        .mixer-toggle button:last-child {
+            border-radius: 0 4px 4px 0;
+        }
+
+        .mixer-toggle button.active {
+            background: var(--text);
+            color: var(--bg-dark);
+            border-color: var(--text);
+        }
+
+        .mixer-channel {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .mixer-channel:last-child {
+            margin-bottom: 0;
+        }
+
+        .channel-label {
+            width: 80px;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .channel-slider {
+            flex: 1;
+            -webkit-appearance: none;
+            height: 6px;
+            background: var(--accent);
+            border-radius: 3px;
+            outline: none;
+        }
+
+        .channel-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--text);
+            cursor: pointer;
+        }
+
+        .channel-slider::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--text);
+            cursor: pointer;
+            border: none;
+        }
+
+        .channel-value {
+            width: 40px;
+            text-align: right;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-family: monospace;
+        }
+
+        .mute-btn {
+            min-width: 36px;
+            min-height: 36px;
+            padding: var(--spacing-sm);
+            font-size: 0.8rem;
+            border: 1px solid var(--accent);
+            background: transparent;
+            color: var(--text-muted);
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .mute-btn:focus-visible {
+            outline: 2px solid var(--highlight);
+            outline-offset: 2px;
+        }
+
+        .mute-btn.muted {
+            background: var(--warning);
+            color: var(--bg-dark);
+            border-color: var(--warning);
+        }
+
         .latency-display {
             display: flex;
             justify-content: space-between;
@@ -364,10 +529,17 @@
             background: var(--accent);
             border: none;
             color: var(--text);
-            padding: 4px 8px;
+            min-width: 36px;
+            min-height: 36px;
+            padding: var(--spacing-sm) var(--spacing-md);
             border-radius: 4px;
             cursor: pointer;
-            font-size: 0.75rem;
+            font-size: 0.8rem;
+        }
+
+        .copy-btn:focus-visible {
+            outline: 2px solid var(--highlight);
+            outline-offset: 2px;
         }
 
         .fullscreen-toggle {
@@ -395,32 +567,9 @@
             padding: 8px 16px;
         }
 
-        /* Audio output indicator */
+        /* Hidden audio indicator - removed from UI */
         .audio-output-indicator {
-            position: fixed;
-            bottom: 20px;
-            left: 20px;
-            background: var(--bg-panel);
-            padding: 12px 20px;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            border: 1px solid var(--accent);
-            z-index: 1000;
-        }
-
-        .speaker-icon {
-            font-size: 1.5rem;
-        }
-
-        .speaker-icon.active {
-            animation: speaker-pulse 0.5s infinite alternate;
-        }
-
-        @keyframes speaker-pulse {
-            from { transform: scale(1); }
-            to { transform: scale(1.1); }
+            display: none !important;
         }
 
         /* Hidden audio element for TTS playback */
@@ -488,13 +637,94 @@
         @media (max-width: 1024px) {
             .main-container {
                 grid-template-columns: 1fr;
-                grid-template-rows: 1fr 1fr;
+                grid-template-rows: auto 1fr;  /* Fixed: auto for video, 1fr for sidebar */
             }
 
             .sidebar {
                 border-left: none;
                 border-top: 2px solid var(--accent);
+                max-height: 50vh;
+                overflow-y: auto;
             }
+
+            /* Full-width overlay on mobile/tablet */
+            .video-overlay {
+                width: 100%;
+            }
+
+            /* Auto-collapse advanced sections on mobile */
+            body:not(.advanced-mode) .audio-mixer,
+            body:not(.advanced-mode) .output-endpoints {
+                display: none;
+            }
+        }
+
+        /* ==========================================
+           Progressive Disclosure - Simple/Advanced Mode
+           ========================================== */
+
+        /* Advanced mode toggle button */
+        .mode-toggle {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            padding: var(--spacing-sm) var(--spacing-md);
+            background: transparent;
+            border: 1px solid var(--accent);
+            border-radius: 4px;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mode-toggle:hover {
+            border-color: var(--text-muted);
+            color: var(--text);
+        }
+
+        .mode-toggle:focus-visible {
+            outline: 2px solid var(--highlight);
+            outline-offset: 2px;
+        }
+
+        .mode-toggle.active {
+            background: var(--accent);
+            border-color: var(--text-muted);
+            color: var(--text);
+        }
+
+        .mode-toggle-icon {
+            font-size: 1rem;
+        }
+
+        /* Simple mode (default) - hide advanced sections */
+        body:not(.advanced-mode) .audio-mixer {
+            display: none;
+        }
+
+        body:not(.advanced-mode) .output-endpoints {
+            display: none;
+        }
+
+        /* Section transitions */
+        .audio-mixer,
+        .output-endpoints {
+            transition: all 0.3s ease;
+        }
+
+        /* Advanced mode indicator */
+        .advanced-indicator {
+            display: none;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-left: var(--spacing-sm);
+        }
+
+        body.advanced-mode .advanced-indicator {
+            display: inline;
         }
     </style>
 </head>
@@ -513,6 +743,10 @@
             Zen Live
         </div>
         <div class="nav-links">
+            <button class="mode-toggle" id="advancedToggle" onclick="toggleAdvancedMode()" aria-label="Toggle advanced mode" title="Toggle advanced controls (Ctrl+Shift+A)">
+                <span class="mode-toggle-icon" id="modeIcon">+</span>
+                <span id="modeLabel">Advanced</span>
+            </button>
             <a href="/docs" target="_blank">API Docs</a>
             <a href="/api/spec" target="_blank">Spec</a>
             <a href="https://github.com/zenlm/zen-live" target="_blank">GitHub</a>
@@ -534,10 +768,17 @@
 
     <div class="main-container">
         <div class="video-section">
-            <video id="videoElement" autoplay muted playsinline></video>
+            <div class="video-container">
+                <video id="videoElement" autoplay muted playsinline></video>
+            </div>
             <button class="fullscreen-toggle" onclick="toggleFullscreen()">Fullscreen</button>
             <div class="video-overlay">
+                <div class="source-caption" id="sourceCaption">
+                    <span class="label" id="sourceLangLabel">SOURCE</span>
+                    <span class="text"></span>
+                </div>
                 <div class="live-caption" id="liveCaption">
+                    <span class="label" style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; color: #999; display: block; margin-bottom: 4px;" id="targetLangLabel">TRANSLATED</span>
                     <span class="stable"></span>
                     <span class="interim"></span>
                 </div>
@@ -550,9 +791,9 @@
             <div class="controls-section">
                 <div class="control-group">
                     <label>Source Language</label>
-                    <select id="srcLanguage">
-                        <option value="Spanish" selected>Spanish (Espanol)</option>
-                        <option value="English">English</option>
+                    <select id="srcLanguage" onchange="onLanguageChange()">
+                        <option value="English" selected>English</option>
+                        <option value="Spanish">Spanish (Espanol)</option>
                         <option value="Chinese">Chinese (Mandarin)</option>
                         <option value="Portuguese">Portuguese</option>
                         <option value="French">French</option>
@@ -563,13 +804,14 @@
                         <option value="Japanese">Japanese</option>
                         <option value="Korean">Korean</option>
                     </select>
+                    <small class="help-text" id="langDetectInfo" style="display:none;">Detecting language...</small>
                 </div>
 
                 <div class="control-group">
                     <label>Target Language</label>
-                    <select id="targetLanguage">
-                        <option value="English" selected>English</option>
-                        <option value="Spanish">Spanish (Espanol)</option>
+                    <select id="targetLanguage" onchange="onLanguageChange()">
+                        <option value="Spanish" selected>Spanish (Espanol)</option>
+                        <option value="English">English</option>
                         <option value="Chinese">Chinese (Mandarin)</option>
                         <option value="Portuguese">Portuguese</option>
                         <option value="French">French</option>
@@ -579,9 +821,9 @@
 
                 <div class="control-group">
                     <label>Voice</label>
-                    <select id="voiceSelect">
-                        <option value="Cherry" selected>Cherry - Female</option>
-                        <option value="Nofish">Cort - Male</option>
+                    <select id="voiceSelect" onchange="onVoiceChange()">
+                        <option value="Cherry">Cherry - Female</option>
+                        <option value="Nofish" selected>Cort - Male</option>
                     </select>
                     <small class="help-text" id="voiceInfo">Multilingual: en, es, zh, fr, de, it, pt, ru, ja, ko</small>
                 </div>
@@ -592,6 +834,20 @@
                         <option value="camera">Camera/Webcam</option>
                         <option value="screen">Screen Capture</option>
                         <option value="srt">SRT Input (URL)</option>
+                    </select>
+                </div>
+
+                <div class="control-group" id="micSelectGroup">
+                    <label>Microphone</label>
+                    <select id="micSelect">
+                        <option value="">Loading devices...</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>Audio Output</label>
+                    <select id="speakerSelect">
+                        <option value="">Loading devices...</option>
                     </select>
                 </div>
 
@@ -666,13 +922,37 @@
             </div>
 
             <div class="audio-monitor">
-                <label>Audio Output Level</label>
-                <div class="audio-level">
-                    <div class="audio-level-bar" id="audioLevelBar"></div>
-                </div>
-                <div class="latency-display">
-                    <span>End-to-end latency:</span>
+                <div class="latency-display" style="margin-top: 0;">
+                    <span>Translation latency:</span>
                     <span class="latency-value" id="e2eLatency">--ms</span>
+                </div>
+                <div class="latency-display" style="margin-top: 8px;">
+                    <span>Avg latency (last 10):</span>
+                    <span class="latency-value" id="avgLatency">--ms</span>
+                </div>
+            </div>
+
+            <!-- Audio Mixer -->
+            <div class="audio-mixer">
+                <div class="mixer-header">
+                    <label>AUDIO MIXER</label>
+                    <div class="mixer-toggle">
+                        <button id="modeSource" onclick="setAudioMode('source')">Source</button>
+                        <button id="modeMix" class="active" onclick="setAudioMode('mix')">Mix</button>
+                        <button id="modeTranslated" onclick="setAudioMode('translated')">Translated</button>
+                    </div>
+                </div>
+                <div class="mixer-channel">
+                    <span class="channel-label" id="sourceLabel">Source</span>
+                    <input type="range" class="channel-slider" id="sourceVolume" min="0" max="100" value="30" oninput="updateVolume('source')" aria-labelledby="sourceLabel" aria-valuenow="30" aria-valuemin="0" aria-valuemax="100">
+                    <span class="channel-value" id="sourceValue">30%</span>
+                    <button class="mute-btn" id="sourceMute" onclick="toggleMute('source')" aria-label="Mute source audio" aria-pressed="false">M</button>
+                </div>
+                <div class="mixer-channel">
+                    <span class="channel-label" id="translatedLabel">Translated</span>
+                    <input type="range" class="channel-slider" id="translatedVolume" min="0" max="100" value="100" oninput="updateVolume('translated')" aria-labelledby="translatedLabel" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100">
+                    <span class="channel-value" id="translatedValue">100%</span>
+                    <button class="mute-btn" id="translatedMute" onclick="toggleMute('translated')" aria-label="Mute translated audio" aria-pressed="false">M</button>
                 </div>
             </div>
 
@@ -714,6 +994,27 @@
         let isStreaming = false;
         let latencyStart = 0;
 
+        // Audio mixer state
+        let sourceGainNode = null;
+        let translatedGainNode = null;
+        let mixerDestination = null;
+        let sourceVolume = 0.3;
+        let translatedVolume = 1.0;
+        let sourceMuted = false;
+        let translatedMuted = false;
+        let audioMode = 'mix'; // 'source', 'mix', or 'translated'
+
+        // DashScope ASR for source language transcription (via backend proxy)
+        let asrWebSocket = null;
+        let asrAudioProcessor = null;
+        let asrAudioContext = null;
+        let asrSourceNode = null;
+        let sourceFinalText = '';
+        let sourceInterimText = '';
+
+        // ASR via backend proxy (API key secured server-side)
+        const ASR_WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/v1/asr`;
+
         const videoElement = document.getElementById('videoElement');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
@@ -724,10 +1025,14 @@
         const transcriptLog = document.getElementById('transcriptLog');
         const audioLevelBar = document.getElementById('audioLevelBar');
         const e2eLatency = document.getElementById('e2eLatency');
-        const audioIndicator = document.getElementById('audioIndicator');
-        const speakerIcon = document.getElementById('speakerIcon');
         const inputSource = document.getElementById('inputSource');
         const srtInputGroup = document.getElementById('srtInputGroup');
+        const sourceCaption = document.getElementById('sourceCaption');
+        const latencyDisplay = document.getElementById('latencyDisplay');
+        const avgLatencyEl = document.getElementById('avgLatency');
+
+        // Latency tracking
+        let latencyHistory = [];
 
         // Update URLs display
         const baseUrl = window.location.origin;
@@ -737,7 +1042,57 @@
         // Input source toggle
         inputSource.addEventListener('change', (e) => {
             srtInputGroup.style.display = e.target.value === 'srt' ? 'block' : 'none';
+            // Hide mic selection for screen capture
+            document.getElementById('micSelectGroup').style.display =
+                e.target.value === 'srt' ? 'none' : 'block';
         });
+
+        // ==========================================
+        // Device Enumeration
+        // ==========================================
+        const micSelect = document.getElementById('micSelect');
+        const speakerSelect = document.getElementById('speakerSelect');
+
+        async function enumerateDevices() {
+            try {
+                // Request permission first to get device labels
+                await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+
+                const devices = await navigator.mediaDevices.enumerateDevices();
+
+                // Clear existing options
+                micSelect.innerHTML = '';
+                speakerSelect.innerHTML = '';
+
+                // Add default options
+                micSelect.innerHTML = '<option value="">System Default</option>';
+                speakerSelect.innerHTML = '<option value="">System Default</option>';
+
+                devices.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `${device.kind} (${device.deviceId.substring(0, 8)}...)`;
+
+                    if (device.kind === 'audioinput') {
+                        micSelect.appendChild(option);
+                    } else if (device.kind === 'audiooutput') {
+                        speakerSelect.appendChild(option);
+                    }
+                });
+
+                console.log('Devices enumerated:', devices.length);
+            } catch (err) {
+                console.error('Error enumerating devices:', err);
+                micSelect.innerHTML = '<option value="">Permission denied</option>';
+                speakerSelect.innerHTML = '<option value="">Permission denied</option>';
+            }
+        }
+
+        // Listen for device changes (e.g., plugging in headphones)
+        navigator.mediaDevices.addEventListener('devicechange', enumerateDevices);
+
+        // Enumerate devices on page load
+        enumerateDevices();
 
         async function startStream() {
             try {
@@ -746,21 +1101,41 @@
 
                 const sourceType = inputSource.value;
 
+                // Get selected devices
+                const selectedMic = micSelect.value;
+                const selectedSpeaker = speakerSelect.value;
+
+                // Build audio constraints with selected device
+                const audioConstraints = {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    sampleRate: 16000
+                };
+                if (selectedMic) {
+                    audioConstraints.deviceId = { exact: selectedMic };
+                }
+
                 // Get media based on source type
                 if (sourceType === 'camera') {
                     mediaStream = await navigator.mediaDevices.getUserMedia({
                         video: { width: 1280, height: 720, facingMode: 'environment' },
-                        audio: {
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            sampleRate: 16000
-                        }
+                        audio: audioConstraints
                     });
                 } else if (sourceType === 'screen') {
                     mediaStream = await navigator.mediaDevices.getDisplayMedia({
                         video: { width: 1920, height: 1080 },
                         audio: true
                     });
+                }
+
+                // Set output device if supported
+                if (selectedSpeaker && typeof document.getElementById('audioOutput').setSinkId === 'function') {
+                    try {
+                        await document.getElementById('audioOutput').setSinkId(selectedSpeaker);
+                        console.log('Audio output set to:', selectedSpeaker);
+                    } catch (e) {
+                        console.warn('Could not set audio output device:', e);
+                    }
                 }
 
                 videoElement.srcObject = mediaStream;
@@ -783,6 +1158,13 @@
 
             peerConnection = new RTCPeerConnection(config);
 
+            // Create data channel - REQUIRED for FastRTC handler lifecycle
+            // FastRTC's AudioCallback.start() waits for this before calling start_up()
+            const dataChannel = peerConnection.createDataChannel('fastrtc');
+            dataChannel.onopen = () => console.log('📡 Data channel opened');
+            dataChannel.onmessage = (e) => console.log('📡 Data channel message:', e.data);
+            dataChannel.onerror = (e) => console.error('📡 Data channel error:', e);
+
             // Add tracks
             mediaStream.getTracks().forEach(track => {
                 peerConnection.addTrack(track, mediaStream);
@@ -792,15 +1174,18 @@
             peerConnection.ontrack = (event) => {
                 console.log('Received remote track:', event.track.kind);
                 if (event.track.kind === 'audio') {
-                    const audio = document.getElementById('audioOutput');
-                    audio.srcObject = event.streams[0];
-                    audio.play().catch(e => console.log('Audio play error:', e));
+                    // Don't play directly via audio element - use mixer instead
+                    const translatedStream = event.streams[0];
 
-                    audioIndicator.style.display = 'flex';
+                    // Update audio status in header
                     audioStatus.classList.add('live');
 
-                    // Setup audio visualization
-                    setupAudioVisualization(event.streams[0]);
+                    // Get audio track from local media for source mixing
+                    const sourceAudioTrack = mediaStream?.getAudioTracks()[0];
+                    const sourceStream = sourceAudioTrack ? new MediaStream([sourceAudioTrack]) : null;
+
+                    // Setup audio mixer with both streams
+                    setupAudioMixer(sourceStream, translatedStream);
                 }
             };
 
@@ -818,6 +1203,10 @@
                     isStreaming = true;
                     stopBtn.disabled = false;
                     latencyStart = Date.now();
+                    // Update caption labels with current languages
+                    updateCaptionLabels();
+                    // Start browser speech recognition for source captions
+                    startSpeechRecognition();
                 } else if (peerConnection.connectionState === 'failed') {
                     updateStatus('error');
                 }
@@ -858,14 +1247,22 @@
             });
 
             const data = await response.json();
+            console.log('📥 Server response:', data);
 
-            // Check for error
+            // Check for error responses
             if (data.error) {
                 throw new Error(data.error);
             }
 
+            // Check for FastRTC-style error response (status: "failed")
+            if (data.status === 'failed') {
+                const errorMsg = data.meta?.error || 'Connection failed';
+                throw new Error(`WebRTC error: ${errorMsg}`);
+            }
+
             // Validate response has required fields
             if (!data.sdp || !data.type) {
+                console.error('Invalid server response:', data);
                 throw new Error('Invalid server response: missing sdp or type');
             }
 
@@ -890,12 +1287,25 @@
                 const data = JSON.parse(e.data);
                 updateTranscript(data);
 
-                // Update latency display
+                // Update latency displays
                 const now = Date.now();
                 const latency = now - latencyStart;
-                if (latency < 5000) {
+                if (latency > 0 && latency < 10000) {
+                    // Update sidebar latency
                     e2eLatency.textContent = `${latency}ms`;
                     e2eLatency.className = latency > 500 ? 'latency-value high' : 'latency-value';
+
+                    // Update header latency
+                    latencyDisplay.textContent = `Latency: ${latency}ms`;
+
+                    // Track for average
+                    latencyHistory.push(latency);
+                    if (latencyHistory.length > 10) latencyHistory.shift();
+
+                    // Calculate and show average
+                    const avg = Math.round(latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length);
+                    avgLatencyEl.textContent = `${avg}ms`;
+                    avgLatencyEl.className = avg > 500 ? 'latency-value high' : 'latency-value';
                 }
             });
 
@@ -905,6 +1315,12 @@
         }
 
         function updateTranscript(data) {
+            // Handle source language caption (English input)
+            if (data.source_content !== undefined) {
+                sourceCaption.querySelector('.text').textContent = data.source_content;
+                return;
+            }
+
             const content = data.content || '';
 
             // Parse HTML content for stable/interim text
@@ -914,7 +1330,7 @@
             const stableText = stableMatch ? stableMatch[1] : '';
             const interimText = interimMatch ? interimMatch[1] : '';
 
-            // Update live caption
+            // Update live caption (translated text)
             liveCaption.querySelector('.stable').textContent = stableText;
             liveCaption.querySelector('.interim').textContent = interimText;
 
@@ -938,34 +1354,235 @@
             transcriptLog.scrollTop = transcriptLog.scrollHeight;
         }
 
-        function setupAudioVisualization(stream) {
-            audioContext = new AudioContext();
-            audioAnalyser = audioContext.createAnalyser();
-            const source = audioContext.createMediaStreamSource(stream);
-            source.connect(audioAnalyser);
+        // ==========================================
+        // DashScope ASR for Source Language Transcription
+        // Uses qwen3-asr-flash-realtime model
+        // ==========================================
 
-            audioAnalyser.fftSize = 256;
-            const bufferLength = audioAnalyser.frequencyBinCount;
-            const dataArray = new Uint8Array(bufferLength);
+        // Language mapping from our names to DashScope codes
+        const asrLangMap = {
+            'English': 'en',
+            'Spanish': 'es',
+            'Chinese': 'zh',
+            'French': 'fr',
+            'German': 'de',
+            'Japanese': 'ja',
+            'Korean': 'ko',
+            'Portuguese': 'pt',
+            'Russian': 'ru',
+            'Italian': 'it',
+            'Arabic': 'ar',
+            'Cantonese': 'yue'
+        };
 
-            function updateLevel() {
-                if (!isStreaming) return;
+        function startSpeechRecognition() {
+            // Start DashScope ASR using the current mediaStream
+            if (!mediaStream) {
+                console.warn('No media stream available for ASR');
+                return;
+            }
+            startDashScopeASR(mediaStream);
+        }
 
-                audioAnalyser.getByteFrequencyData(dataArray);
-                const average = dataArray.reduce((a, b) => a + b) / bufferLength;
-                const level = Math.min(100, (average / 128) * 100);
+        async function startDashScopeASR(stream) {
+            console.log('🎙️ Starting DashScope ASR...');
 
-                audioLevelBar.style.width = `${level}%`;
-                speakerIcon.className = level > 10 ? 'speaker-icon active' : 'speaker-icon';
+            // Show listening indicator
+            sourceCaption.querySelector('.text').textContent = 'Connecting to ASR...';
+            sourceCaption.style.opacity = '1';
 
-                requestAnimationFrame(updateLevel);
+            try {
+                // Create audio context for capturing PCM
+                asrAudioContext = new AudioContext({ sampleRate: 16000 });
+                asrSourceNode = asrAudioContext.createMediaStreamSource(stream);
+
+                // Create script processor for audio capture (4096 samples buffer)
+                asrAudioProcessor = asrAudioContext.createScriptProcessor(4096, 1, 1);
+
+                // Connect to backend ASR proxy (API key handled server-side)
+                asrWebSocket = new WebSocket(ASR_WS_URL);
+
+                asrWebSocket.onopen = () => {
+                    console.log('🎙️ ASR WebSocket connected');
+
+                    // Get source language for ASR
+                    const srcLang = document.getElementById('srcLanguage').value;
+                    const asrLang = asrLangMap[srcLang] || 'en';
+
+                    // Send session update with ASR config
+                    const sessionUpdate = {
+                        type: 'session.update',
+                        session: {
+                            model: 'qwen3-asr-flash-realtime',
+                            modalities: ['text'],
+                            input_audio_transcription: {
+                                model: 'qwen3-asr-flash-realtime',
+                                language: asrLang,
+                                format: 'pcm',
+                                sample_rate: 16000
+                            }
+                        }
+                    };
+                    asrWebSocket.send(JSON.stringify(sessionUpdate));
+                    console.log('🎙️ ASR session config sent, language:', asrLang);
+
+                    // Update caption
+                    sourceCaption.querySelector('.text').textContent = 'Listening...';
+                };
+
+                asrWebSocket.onmessage = (event) => {
+                    const msg = JSON.parse(event.data);
+                    handleASRMessage(msg);
+                };
+
+                asrWebSocket.onerror = (error) => {
+                    console.error('🎙️ ASR WebSocket error:', error);
+                    sourceCaption.querySelector('.text').textContent = '[ASR connection error]';
+                };
+
+                asrWebSocket.onclose = (event) => {
+                    console.log('🎙️ ASR WebSocket closed:', event.code, event.reason);
+                };
+
+                // Audio processor callback - capture and send audio
+                asrAudioProcessor.onaudioprocess = (event) => {
+                    if (asrWebSocket?.readyState === WebSocket.OPEN) {
+                        const inputData = event.inputBuffer.getChannelData(0);
+
+                        // Convert Float32 to Int16 PCM
+                        const pcmData = new Int16Array(inputData.length);
+                        for (let i = 0; i < inputData.length; i++) {
+                            const s = Math.max(-1, Math.min(1, inputData[i]));
+                            pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                        }
+
+                        // Convert to base64
+                        const base64Audio = btoa(String.fromCharCode.apply(null, new Uint8Array(pcmData.buffer)));
+
+                        // Send audio chunk
+                        asrWebSocket.send(JSON.stringify({
+                            type: 'input_audio_buffer.append',
+                            audio: base64Audio
+                        }));
+                    }
+                };
+
+                // Connect audio nodes
+                asrSourceNode.connect(asrAudioProcessor);
+                asrAudioProcessor.connect(asrAudioContext.destination);
+
+                console.log('🎙️ ASR audio capture started');
+
+            } catch (error) {
+                console.error('🎙️ Failed to start ASR:', error);
+                sourceCaption.querySelector('.text').textContent = '[ASR failed to start]';
+            }
+        }
+
+        function handleASRMessage(msg) {
+            const type = msg.type;
+
+            switch (type) {
+                case 'session.created':
+                    console.log('🎙️ ASR session created:', msg.session?.id);
+                    break;
+
+                case 'session.updated':
+                    console.log('🎙️ ASR session updated');
+                    break;
+
+                case 'input_audio_buffer.speech_started':
+                    console.log('🎙️ Speech started (VAD)');
+                    sourceCaption.style.opacity = '1';
+                    break;
+
+                case 'input_audio_buffer.speech_stopped':
+                    console.log('🎙️ Speech stopped (VAD)');
+                    break;
+
+                case 'conversation.item.input_audio_transcription.text':
+                    // Interim transcription
+                    const interimText = msg.text || '';
+                    if (interimText) {
+                        sourceInterimText = interimText;
+                        sourceCaption.querySelector('.text').textContent = sourceFinalText + interimText;
+                        sourceCaption.style.opacity = '1';
+                        console.log('🎙️ Interim:', interimText.substring(0, 50));
+                    }
+                    break;
+
+                case 'conversation.item.input_audio_transcription.completed':
+                    // Final transcription
+                    const finalText = msg.transcript || '';
+                    if (finalText) {
+                        sourceFinalText = finalText;
+                        sourceInterimText = '';
+                        sourceCaption.querySelector('.text').textContent = finalText;
+                        sourceCaption.style.opacity = '1';
+                        console.log('🎙️ Final:', finalText.substring(0, 50));
+                    }
+                    break;
+
+                case 'error':
+                    console.error('🎙️ ASR error:', msg.error);
+                    sourceCaption.querySelector('.text').textContent = `[ASR error: ${msg.error?.message || 'Unknown'}]`;
+                    break;
+
+                default:
+                    // Ignore other message types
+                    break;
+            }
+        }
+
+        function stopDashScopeASR() {
+            // Close WebSocket connection
+            if (asrWebSocket) {
+                asrWebSocket.onclose = null; // Prevent reconnect
+                asrWebSocket.onerror = null;
+                asrWebSocket.onmessage = null;
+                asrWebSocket.close();
+                asrWebSocket = null;
+                console.log('🎙️ ASR WebSocket closed');
             }
 
-            updateLevel();
+            // Disconnect audio processing
+            if (asrAudioProcessor) {
+                asrAudioProcessor.disconnect();
+                asrAudioProcessor = null;
+            }
+            if (asrSourceNode) {
+                asrSourceNode.disconnect();
+                asrSourceNode = null;
+            }
+            if (asrAudioContext) {
+                asrAudioContext.close();
+                asrAudioContext = null;
+            }
+
+            sourceFinalText = '';
+            sourceInterimText = '';
+        }
+
+        // Update caption labels with current language names
+        function updateCaptionLabels() {
+            const srcLang = document.getElementById('srcLanguage').value;
+            const targetLang = document.getElementById('targetLanguage').value;
+            const sourceLangLabel = document.getElementById('sourceLangLabel');
+            const targetLangLabel = document.getElementById('targetLangLabel');
+
+            if (sourceLangLabel) {
+                sourceLangLabel.textContent = `SOURCE (${srcLang})`;
+            }
+            if (targetLangLabel) {
+                targetLangLabel.textContent = `TRANSLATED (${targetLang})`;
+            }
         }
 
         function stopStream() {
             isStreaming = false;
+
+            // Stop DashScope ASR
+            stopDashScopeASR();
 
             if (mediaStream) {
                 mediaStream.getTracks().forEach(track => track.stop());
@@ -977,13 +1594,26 @@
                 peerConnection = null;
             }
 
+            // Clean up audio mixer
+            sourceGainNode = null;
+            translatedGainNode = null;
+            mixerDestination = null;
+
             if (audioContext) {
                 audioContext.close();
                 audioContext = null;
             }
 
             videoElement.srcObject = null;
-            audioIndicator.style.display = 'none';
+
+            // Clear source caption
+            sourceCaption.querySelector('.text').textContent = '';
+
+            // Reset latency displays
+            latencyHistory = [];
+            latencyDisplay.textContent = 'Latency: --ms';
+            e2eLatency.textContent = '--ms';
+            avgLatencyEl.textContent = '--ms';
 
             updateStatus('disconnected');
             startBtn.disabled = false;
@@ -1031,6 +1661,141 @@
         window.startStream = startStream;
         window.stopStream = stopStream;
 
+        // ==========================================
+        // Language Change Handler
+        // ==========================================
+        window.onLanguageChange = function() {
+            // If currently streaming, restart with new language settings
+            if (isStreaming) {
+                const shouldRestart = confirm('Language changed. Restart stream with new settings?');
+                if (shouldRestart) {
+                    stopStream();
+                    setTimeout(() => startStream(), 500);
+                }
+            }
+        };
+
+        // ==========================================
+        // Voice Change Handler
+        // ==========================================
+        window.onVoiceChange = function() {
+            // If currently streaming, restart with new voice
+            if (isStreaming) {
+                const shouldRestart = confirm('Voice changed. Restart stream with new voice?');
+                if (shouldRestart) {
+                    stopStream();
+                    setTimeout(() => startStream(), 500);
+                }
+            }
+        };
+
+        // ==========================================
+        // Audio Mixer Functions
+        // ==========================================
+
+        window.setAudioMode = function(mode) {
+            audioMode = mode;
+
+            // Update toggle button states
+            document.getElementById('modeSource').classList.toggle('active', mode === 'source');
+            document.getElementById('modeMix').classList.toggle('active', mode === 'mix');
+            document.getElementById('modeTranslated').classList.toggle('active', mode === 'translated');
+
+            // Apply mode to gain nodes
+            applyAudioMode();
+        };
+
+        function applyAudioMode() {
+            if (!sourceGainNode || !translatedGainNode) return;
+
+            switch (audioMode) {
+                case 'source':
+                    sourceGainNode.gain.value = sourceMuted ? 0 : sourceVolume;
+                    translatedGainNode.gain.value = 0;
+                    break;
+                case 'translated':
+                    sourceGainNode.gain.value = 0;
+                    translatedGainNode.gain.value = translatedMuted ? 0 : translatedVolume;
+                    break;
+                case 'mix':
+                default:
+                    sourceGainNode.gain.value = sourceMuted ? 0 : sourceVolume;
+                    translatedGainNode.gain.value = translatedMuted ? 0 : translatedVolume;
+                    break;
+            }
+        }
+
+        window.updateVolume = function(channel) {
+            const slider = document.getElementById(channel + 'Volume');
+            const display = document.getElementById(channel + 'Value');
+            const value = parseInt(slider.value) / 100;
+
+            display.textContent = slider.value + '%';
+
+            if (channel === 'source') {
+                sourceVolume = value;
+                if (sourceGainNode && !sourceMuted && audioMode !== 'translated') {
+                    sourceGainNode.gain.value = value;
+                }
+            } else {
+                translatedVolume = value;
+                if (translatedGainNode && !translatedMuted && audioMode !== 'source') {
+                    translatedGainNode.gain.value = value;
+                }
+            }
+        };
+
+        window.toggleMute = function(channel) {
+            const btn = document.getElementById(channel + 'Mute');
+
+            if (channel === 'source') {
+                sourceMuted = !sourceMuted;
+                btn.classList.toggle('muted', sourceMuted);
+                btn.setAttribute('aria-pressed', sourceMuted ? 'true' : 'false');
+            } else {
+                translatedMuted = !translatedMuted;
+                btn.classList.toggle('muted', translatedMuted);
+                btn.setAttribute('aria-pressed', translatedMuted ? 'true' : 'false');
+            }
+
+            applyAudioMode();
+        };
+
+        // Setup audio mixing with Web Audio API
+        function setupAudioMixer(sourceStream, translatedStream) {
+            if (!audioContext) {
+                audioContext = new AudioContext();
+            }
+
+            // Create gain nodes for volume control
+            sourceGainNode = audioContext.createGain();
+            translatedGainNode = audioContext.createGain();
+
+            // Create destination (speakers)
+            mixerDestination = audioContext.destination;
+
+            // Connect source audio (from local mic/screen)
+            if (sourceStream) {
+                const sourceNode = audioContext.createMediaStreamSource(sourceStream);
+                sourceNode.connect(sourceGainNode);
+                sourceGainNode.connect(mixerDestination);
+            }
+
+            // Connect translated audio
+            if (translatedStream) {
+                const translatedNode = audioContext.createMediaStreamSource(translatedStream);
+                translatedNode.connect(translatedGainNode);
+                translatedGainNode.connect(mixerDestination);
+
+                // Also setup visualization on translated audio
+                audioAnalyser = audioContext.createAnalyser();
+                translatedNode.connect(audioAnalyser);
+            }
+
+            // Apply initial mode
+            applyAudioMode();
+        }
+
         // Keyboard shortcuts for control room
         document.addEventListener('keydown', (e) => {
             if (e.key === 'F11') {
@@ -1040,7 +1805,60 @@
             if (e.key === 'm' && e.ctrlKey) {
                 document.body.classList.toggle('monitor-mode');
             }
+            // Ctrl+Shift+A for advanced mode toggle
+            if (e.key === 'A' && e.ctrlKey && e.shiftKey) {
+                e.preventDefault();
+                toggleAdvancedMode();
+            }
         });
+
+        // ==========================================
+        // Advanced Mode Toggle (Progressive Disclosure)
+        // ==========================================
+        const ADVANCED_MODE_KEY = 'zenLiveAdvancedMode';
+
+        window.toggleAdvancedMode = function() {
+            const isAdvanced = document.body.classList.toggle('advanced-mode');
+            const toggle = document.getElementById('advancedToggle');
+            const icon = document.getElementById('modeIcon');
+            const label = document.getElementById('modeLabel');
+
+            // Update button state
+            toggle.classList.toggle('active', isAdvanced);
+            icon.textContent = isAdvanced ? '-' : '+';
+            label.textContent = isAdvanced ? 'Simple' : 'Advanced';
+
+            // Save preference
+            try {
+                localStorage.setItem(ADVANCED_MODE_KEY, isAdvanced ? 'true' : 'false');
+            } catch (e) {
+                console.warn('Could not save advanced mode preference:', e);
+            }
+
+            // Show notification
+            showNotification(isAdvanced ? 'Advanced mode enabled' : 'Simple mode enabled');
+        };
+
+        // Load advanced mode preference
+        function loadAdvancedModePreference() {
+            try {
+                const saved = localStorage.getItem(ADVANCED_MODE_KEY);
+                if (saved === 'true') {
+                    document.body.classList.add('advanced-mode');
+                    const toggle = document.getElementById('advancedToggle');
+                    const icon = document.getElementById('modeIcon');
+                    const label = document.getElementById('modeLabel');
+                    toggle.classList.add('active');
+                    icon.textContent = '-';
+                    label.textContent = 'Simple';
+                }
+            } catch (e) {
+                console.warn('Could not load advanced mode preference:', e);
+            }
+        }
+
+        // Initialize advanced mode on load
+        loadAdvancedModePreference();
 
         // ==========================================
         // Broadcast Settings - localStorage
