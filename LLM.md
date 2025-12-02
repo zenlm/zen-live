@@ -29,7 +29,7 @@ Control Room Browser
 ## Backend Options
 
 1. **Hanzo Node** (recommended): `HANZO_NODE_URL=http://host:3690`
-2. **Hanzo API**: `API_KEY=xxx`
+2. **Hanzo API**: `HANZO_API_KEY=xxx`
 
 ## Files
 

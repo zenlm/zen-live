@@ -8,8 +8,8 @@ services:
       - "${PORT:-8000}:8000"
     environment:
       # Backend configuration
-      - API_KEY=${API_KEY:-}
-      - API_URL=${API_URL:-}
+      - HANZO_API_KEY=${HANZO_API_KEY:-}
+      - TRANSLATE_API_URL=${TRANSLATE_API_URL:-}
       - ASR_API_URL=${ASR_API_URL:-}
       - HANZO_NODE_URL=${HANZO_NODE_URL:-}
       - ZEN_OMNI_PATH=${ZEN_OMNI_PATH:-}

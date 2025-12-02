@@ -6,12 +6,12 @@ Powered by Hanzo AI infrastructure with Zen Omni backend.
 
 Backend options:
   1. Hanzo Node API (recommended) - Set HANZO_NODE_URL
-  2. Direct Hanzo API - Set API_KEY
+  2. Direct Hanzo API - Set HANZO_API_KEY
   3. Local Zen Omni model - Set ZEN_OMNI_PATH
 
 Usage:
   export HANZO_NODE_URL=http://localhost:3690  # or
-  export API_KEY=your_hanzo_key
+  export HANZO_API_KEY=your_hanzo_key
   python app.py
 
 Endpoints:
@@ -64,7 +64,7 @@ cur_dir = Path(__file__).parent
 
 # Backend configuration
 HANZO_NODE_URL = os.environ.get("HANZO_NODE_URL")  # Preferred: Hanzo Node backend
-API_KEY = os.environ.get("API_KEY")  # Fallback: Direct Hanzo API
+HANZO_API_KEY = os.environ.get("HANZO_API_KEY")  # Fallback: Direct Hanzo API
 ZEN_OMNI_PATH = os.environ.get("ZEN_OMNI_PATH")  # Optional: Local model path
 
 # Server configuration
@@ -81,7 +81,7 @@ SRT_INPUT_URL = os.environ.get("SRT_INPUT_URL")  # e.g., srt://source:9000?mode=
 RTMP_INPUT_URL = os.environ.get("RTMP_INPUT_URL")  # e.g., rtmp://source/live/stream
 WHIP_ENABLED = os.environ.get("WHIP_ENABLED", "true").lower() == "true"  # WebRTC WHIP input
 
-API_URL = os.environ.get("API_URL", "")
+TRANSLATE_API_URL = os.environ.get("TRANSLATE_API_URL", "")
 ASR_API_URL = os.environ.get("ASR_API_URL", "")
 
 # HTTP Basic Auth setup
@@ -151,15 +151,15 @@ ssl_context = ssl.create_default_context(cafile=certifi.where())
 if HANZO_NODE_URL:
     print(f"🔗 Zen Live: Using Hanzo Node backend at {HANZO_NODE_URL}")
     BACKEND_TYPE = "hanzo_node"
-elif API_KEY:
+elif HANZO_API_KEY:
     print("🔗 Zen Live: Using direct Hanzo API")
     BACKEND_TYPE = "hanzo_api"
 else:
     print("⚠️  Zen Live: No backend configured")
-    print("   Set HANZO_NODE_URL (recommended) or API_KEY")
+    print("   Set HANZO_NODE_URL (recommended) or HANZO_API_KEY")
     BACKEND_TYPE = None
 
-headers = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
+headers = {"Authorization": f"Bearer {HANZO_API_KEY}"} if HANZO_API_KEY else {}
 LANG_MAP = {
     "en": "English",
     "zh": "Chinese",
@@ -248,8 +248,8 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             if src_language_code == target_language_code:
                 print(f"⚠️ 源语言和目标语言相同({target_language_name})，将以复述模式运行")
 
-            print(f"🔌 Connecting to Hanzo WebSocket: {API_URL[:50]}...")
-            async with connect(API_URL, additional_headers=headers, ssl=ssl_context) as conn:
+            print(f"🔌 Connecting to Hanzo WebSocket: {TRANSLATE_API_URL[:50]}...")
+            async with connect(TRANSLATE_API_URL, additional_headers=headers, ssl=ssl_context) as conn:
                 print("✅ Hanzo WebSocket connected!")
                 self.client = conn
                 session_update_msg = {
@@ -1248,8 +1248,8 @@ async def websocket_proxy(websocket: WebSocket):
 
     See /api/spec for full API specification.
     """
-    if not API_KEY:
-        await websocket.close(code=4001, reason="API_KEY not configured")
+    if not HANZO_API_KEY:
+        await websocket.close(code=4001, reason="HANZO_API_KEY not configured")
         return
 
     await websocket.accept()
@@ -1258,8 +1258,8 @@ async def websocket_proxy(websocket: WebSocket):
     try:
         # Connect to Hanzo
         upstream_ws = await connect(
-            API_URL,
-            additional_headers={"Authorization": f"Bearer {API_KEY}"},
+            TRANSLATE_API_URL,
+            additional_headers={"Authorization": f"Bearer {HANZO_API_KEY}"},
             ssl=ssl_context
         )
 
@@ -1331,8 +1331,8 @@ async def api_specification():
             },
             "api_key": {
                 "type": "Bearer Token (server-side)",
-                "note": "API key for Hanzo is configured server-side via API_KEY env var",
-                "configured": bool(API_KEY)
+                "note": "API key for Hanzo is configured server-side via HANZO_API_KEY env var",
+                "configured": bool(HANZO_API_KEY)
             }
         },
         "client_events": {
@@ -1442,8 +1442,8 @@ async def asr_websocket_proxy(websocket: WebSocket):
     - input_audio_buffer.speech_started/stopped: VAD events
     - error: Error details
     """
-    if not API_KEY:
-        await websocket.close(code=4001, reason="API_KEY not configured")
+    if not HANZO_API_KEY:
+        await websocket.close(code=4001, reason="HANZO_API_KEY not configured")
         return
 
     await websocket.accept()
@@ -1453,7 +1453,7 @@ async def asr_websocket_proxy(websocket: WebSocket):
         # Connect to Hanzo ASR endpoint
         upstream_ws = await connect(
             ASR_API_URL,
-            additional_headers={"Authorization": f"Bearer {API_KEY}"},
+            additional_headers={"Authorization": f"Bearer {HANZO_API_KEY}"},
             ssl=ssl_context
         )
         print("🎙️ ASR WebSocket proxy connected to Hanzo")

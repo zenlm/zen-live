@@ -28,7 +28,7 @@ docker pull zenlm/zen-live:latest
 # Create a .env file with your configuration
 cat > .env << EOF
 # Hanzo API Configuration
-API_KEY=your_hanzo_api_key_here
+HANZO_API_KEY=your_hanzo_api_key_here
 HANZO_NODE_URL=https://your-hanzo-node.com
 
 # Authentication (optional)
@@ -72,7 +72,7 @@ pip install -r requirements.txt
 # Configure backend (choose one):
 export HANZO_NODE_URL=http://localhost:3690   # Recommended: Hanzo Node
 # or
-export API_KEY=your_hanzo_api_key         # Direct Hanzo API
+export HANZO_API_KEY=your_hanzo_api_key         # Direct Hanzo API
 
 # Run
 python app.py
@@ -124,7 +124,7 @@ export HANZO_NODE_URL=http://your-hanzo-node:3690
 Use Hanzo Zen Live API directly from the cloud (requires API key).
 
 ```bash
-export API_KEY=your_hanzo_key
+export HANZO_API_KEY=your_hanzo_key
 ```
 
 ## Control Room Usage
@@ -182,7 +182,7 @@ English, Chinese, Russian, French, German, Portuguese, Spanish, Italian, Korean,
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `HANZO_NODE_URL` | Hanzo Node backend URL | - |
-| `API_KEY` | Hanzo API key (fallback) | - |
+| `HANZO_API_KEY` | Hanzo API key (fallback) | - |
 | `ZEN_OMNI_PATH` | Local model path | - |
 | `ZEN_LIVE_USER` | HTTP Basic Auth username (optional) | - |
 | `ZEN_LIVE_PASS` | HTTP Basic Auth password (optional) | - |
