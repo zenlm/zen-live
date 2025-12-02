@@ -1,16 +1,3 @@
----
-title: Zen Live
-emoji: 🎙️
-colorFrom: purple
-colorTo: red
-sdk: gradio
-sdk_version: 5.0.0
-app_file: app.py
-pinned: false
-license: apache-2.0
-short_description: Real-time speech translation for broadcast news
----
-
 # Zen Live
 
 Real-time speech translation for broadcast news monitoring. Powered by [Hanzo AI](https://hanzo.ai).
