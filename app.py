@@ -232,13 +232,14 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
     async def start_up(self):
         try:
-            # Use instance session_config (set during handler creation)
-            # This supports concurrent users with different language settings
-            print(f"🎤 Handler starting with session_config: {self.session_config}")
+            # Use global current_session_config (set by webrtc_offer endpoint)
+            # This is set just before stream.offer() is called
+            config = current_session_config
+            print(f"🎤 Handler starting with session_config: {config}")
 
-            src_language_name = self.session_config.get("src_language", "Spanish")
-            target_language_name = self.session_config.get("target_language", "English")
-            voice_id = self.session_config.get("voice", "Nofish")
+            src_language_name = config.get("src_language", "Spanish")
+            target_language_name = config.get("target_language", "English")
+            voice_id = config.get("voice", "Nofish")
 
             src_language_code = LANG_MAP_REVERSE.get(src_language_name, "en")
             target_language_code = LANG_MAP_REVERSE.get(target_language_name, "es")
@@ -678,7 +679,9 @@ class WebRTCOffer(BaseModel):
 
 # Store active sessions for control room
 active_sessions = {}
-# Current session config for single-instance mode (most recent session)
+# Session configs indexed by session_id - used by handlers to get their config
+session_configs = {}
+# Current session config for single-instance mode (fallback)
 current_session_config = {"src_language": "Spanish", "target_language": "English", "voice": "Nofish"}
 
 
@@ -706,9 +709,12 @@ async def webrtc_offer(offer: WebRTCOffer):
             "created_at": time.time()
         }
 
-        # Set session config on the stream handler BEFORE calling offer
-        # This ensures the handler uses this user's language settings
-        stream.handler.session_config = session_config.copy()
+        # Store session config by ID so handler can look it up
+        session_configs[session_id] = session_config.copy()
+
+        # Also update global fallback for single-user mode
+        global current_session_config
+        current_session_config = session_config.copy()
 
         print(f"📡 WebRTC offer received: {offer.src_language} -> {offer.target_language}, voice: {offer.voice}")
 
