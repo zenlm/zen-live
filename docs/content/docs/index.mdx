@@ -1,0 +1,67 @@
+---
+title: Getting Started
+description: Real-time speech translation for broadcast
+---
+
+# Zen Live
+
+Real-time speech translation service for news control rooms, powered by Hanzo AI infrastructure.
+
+## Features
+
+- **Low Latency**: ~3 second round-trip translation
+- **18 Languages**: Spanish, English, Chinese, Portuguese, French, German, Russian, Italian, Korean, Japanese, Cantonese, Indonesian, Vietnamese, Thai, Arabic, Hindi, Greek, Turkish
+- **8 Voices**: Natural-sounding translated audio output
+- **WebRTC**: Browser-based audio/video input
+- **Remote Viewing**: Share sessions with remote team members
+
+## Quick Start
+
+### Using Docker
+
+```bash
+docker run -d \
+  -e HANZO_API_KEY=your_api_key \
+  -e TRANSLATE_API_URL=wss://your-api-endpoint \
+  -p 8000:8000 \
+  zenlm/zen-live:latest
+```
+
+Then open http://localhost:8000 in your browser.
+
+### Using Docker Compose
+
+```yaml
+services:
+  zen-live:
+    image: zenlm/zen-live:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - HANZO_API_KEY=${HANZO_API_KEY}
+      - TRANSLATE_API_URL=${TRANSLATE_API_URL}
+```
+
+## Architecture
+
+```
+┌─────────────┐     WebRTC      ┌─────────────┐
+│   Browser   │ ◄─────────────► │  Zen Live   │
+│  (Audio/    │                 │   Server    │
+│   Video)    │                 │             │
+└─────────────┘                 └──────┬──────┘
+                                       │
+                                       │ WebSocket
+                                       ▼
+                                ┌─────────────┐
+                                │  Hanzo AI   │
+                                │  Translate  │
+                                │     API     │
+                                └─────────────┘
+```
+
+## Next Steps
+
+- [Configuration](/docs/configuration) - Environment variables and settings
+- [API Reference](/docs/api) - REST and WebSocket APIs
+- [Integration](/docs/integration) - Integrate with your broadcast workflow

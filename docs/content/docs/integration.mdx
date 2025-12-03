@@ -1,0 +1,163 @@
+---
+title: Integration Guide
+description: Integrate Zen Live with your broadcast workflow
+---
+
+# Integration Guide
+
+## Browser Integration
+
+### Basic Usage
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Zen Live Integration</title>
+</head>
+<body>
+  <button id="start">Start Translation</button>
+  <div id="transcript"></div>
+
+  <script>
+    const API_BASE = 'https://zen-live.hanzo.ai';
+
+    async function startTranslation() {
+      // 1. Create session
+      const session = await fetch(`${API_BASE}/api/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          src_language: 'Spanish',
+          target_language: 'English',
+          voice: 'Cherry'
+        })
+      }).then(r => r.json());
+
+      // 2. Set up WebRTC
+      const pc = new RTCPeerConnection();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      // 3. Create and send offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const answer = await fetch(`${API_BASE}/webrtc/offer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sdp: offer.sdp,
+          type: 'offer',
+          session_id: session.session_id
+        })
+      }).then(r => r.json());
+
+      await pc.setRemoteDescription(answer);
+
+      // 4. Listen for transcripts
+      const events = new EventSource(
+        `${API_BASE}/outputs?webrtc_id=${session.session_id}`
+      );
+
+      events.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        document.getElementById('transcript').innerHTML = data.content;
+      };
+    }
+
+    document.getElementById('start').onclick = startTranslation;
+  </script>
+</body>
+</html>
+```
+
+## Remote Viewing
+
+Share translation sessions with remote team members.
+
+### Generate Share Link
+
+```javascript
+const shareUrl = `https://zen-live.hanzo.ai/view?session=${sessionId}`;
+```
+
+### View Mode Features
+
+- Real-time transcript display
+- MJPEG video feed from broadcaster
+- Audio stream of translated speech
+- No microphone access required
+
+## OBS Integration
+
+### Browser Source
+
+Add a Browser Source in OBS pointing to your Zen Live monitor page:
+
+```
+URL: https://zen-live.hanzo.ai/monitor?session=YOUR_SESSION_ID
+Width: 1920
+Height: 1080
+```
+
+### Audio Capture
+
+The translated audio can be captured via:
+
+1. **Browser audio output** - Route browser audio to OBS
+2. **Audio stream endpoint** - Use `/api/audio/{session_id}` in VLC/ffmpeg
+
+## Programmatic Access
+
+### Python Client
+
+```python
+import asyncio
+import websockets
+import base64
+import json
+
+async def translate_audio(audio_file: str):
+    uri = "wss://zen-live.hanzo.ai/v1/asr"
+
+    async with websockets.connect(uri, extra_headers={
+        "Authorization": "Basic " + base64.b64encode(b"user:pass").decode()
+    }) as ws:
+        # Send session config
+        await ws.send(json.dumps({
+            "type": "session.update",
+            "session": {
+                "modalities": ["text", "audio"],
+                "voice": "Cherry",
+                "input_audio_transcription": {"language": "es"},
+                "translation": {"language": "en"}
+            }
+        }))
+
+        # Read and send audio
+        with open(audio_file, "rb") as f:
+            while chunk := f.read(3200):  # 100ms at 16kHz
+                await ws.send(json.dumps({
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(chunk).decode()
+                }))
+                await asyncio.sleep(0.1)
+
+        # Receive translations
+        async for msg in ws:
+            event = json.loads(msg)
+            if event["type"] == "response.audio_transcript.done":
+                print(f"Translation: {event['transcript']}")
+
+asyncio.run(translate_audio("spanish_audio.pcm"))
+```
+
+## Latency Optimization
+
+For lowest latency:
+
+1. **Use PCM audio** - No encoding/decoding overhead
+2. **Send frequently** - Small chunks (50-100ms) reduce buffering
+3. **Skip silent frames** - Don't send silence to the API
+4. **Use keepalives** - Maintain warm connection during pauses

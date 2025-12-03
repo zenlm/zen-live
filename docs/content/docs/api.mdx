@@ -1,0 +1,129 @@
+---
+title: API Reference
+description: REST and WebSocket API documentation
+---
+
+# API Reference
+
+## REST Endpoints
+
+### Health Check
+
+```http
+GET /api/status
+```
+
+Returns service health and configuration:
+
+```json
+{
+  "status": "healthy",
+  "service": "zen-live-translate",
+  "version": "1.0.0",
+  "supported_languages": {
+    "source": ["Spanish", "English", ...],
+    "target": ["English", "Chinese", ...]
+  },
+  "voices": ["Cherry", "Nofish", ...]
+}
+```
+
+### Create Session
+
+```http
+POST /api/session
+Content-Type: application/json
+
+{
+  "src_language": "Spanish",
+  "target_language": "English",
+  "voice": "Cherry"
+}
+```
+
+Returns:
+
+```json
+{
+  "session_id": "abc123..."
+}
+```
+
+### WebRTC Offer
+
+```http
+POST /webrtc/offer
+Content-Type: application/json
+
+{
+  "sdp": "...",
+  "type": "offer",
+  "session_id": "abc123..."
+}
+```
+
+## Streaming Endpoints
+
+### Transcript Stream (SSE)
+
+```http
+GET /outputs?webrtc_id={id}
+```
+
+Server-Sent Events stream with translation results:
+
+```
+data: {"role": "source", "source_content": "Hola mundo"}
+data: {"role": "assistant", "content": "Hello world"}
+```
+
+### Audio Stream
+
+```http
+GET /api/audio/{session_id}
+```
+
+Returns PCM audio stream of translated speech.
+
+### Video Stream (MJPEG)
+
+```http
+GET /api/video/{session_id}
+```
+
+Returns MJPEG video stream from broadcaster.
+
+## WebSocket API
+
+### ASR Proxy
+
+```
+wss://zen-live.hanzo.ai/v1/asr
+```
+
+Direct WebSocket proxy to the translation API. Send audio buffers, receive translation events.
+
+#### Client Events
+
+```json
+{
+  "type": "input_audio_buffer.append",
+  "audio": "<base64 PCM audio>"
+}
+```
+
+#### Server Events
+
+```json
+{
+  "type": "response.audio_transcript.text",
+  "text": "Translation text..."
+}
+```
+
+```json
+{
+  "type": "response.audio.delta",
+  "delta": "<base64 audio>"
+}
+```

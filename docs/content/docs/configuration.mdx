@@ -1,0 +1,52 @@
+---
+title: Configuration
+description: Environment variables and settings
+---
+
+# Configuration
+
+Zen Live is configured through environment variables.
+
+## Required Variables
+
+| Variable | Description |
+|----------|-------------|
+| `HANZO_API_KEY` | Your Hanzo AI API key |
+| `TRANSLATE_API_URL` | WebSocket URL for translation API |
+
+## Optional Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8000` | Server port |
+| `BASE_URL` | `https://zen-live.hanzo.ai` | Public URL for documentation |
+| `ZEN_LIVE_USER` | - | HTTP Basic Auth username |
+| `ZEN_LIVE_PASS` | - | HTTP Basic Auth password |
+
+## Authentication
+
+To enable HTTP Basic Authentication, set both `ZEN_LIVE_USER` and `ZEN_LIVE_PASS`:
+
+```bash
+export ZEN_LIVE_USER=admin
+export ZEN_LIVE_PASS=your_secure_password
+```
+
+## Supported Languages
+
+### Source Languages
+Spanish, English, Chinese, Portuguese, French, German, Russian, Italian, Korean, Japanese, Cantonese, Indonesian, Vietnamese, Thai, Arabic, Hindi, Greek, Turkish
+
+### Target Languages
+English, Chinese, Russian, French, German, Portuguese, Spanish, Italian, Korean, Japanese, Cantonese, Indonesian, Vietnamese, Thai, Arabic
+
+## Available Voices
+
+- Cherry (default)
+- Nofish
+- Jada
+- Dylan
+- Sunny
+- Peter
+- Kiki
+- Eric

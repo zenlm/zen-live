@@ -22,43 +22,41 @@ Endpoints:
 
 Part of the Zen AI model family: https://github.com/zenlm
 """
-import os
-import time
-import base64
-import asyncio
-import json
-import secrets
-import signal
-from pathlib import Path
-from contextlib import asynccontextmanager
 
+import asyncio
+import base64
+import json
+import os
+import secrets
+import shutil
+import signal
+import ssl
+import subprocess
+import time
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import certifi
+import cv2
 import gradio as gr
 import numpy as np
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from pydantic import BaseModel, Field
-from typing import Optional, List, Literal
 from fastrtc import (
     AdditionalOutputs,
     # AsyncStreamHandler,
     AsyncAudioVideoStreamHandler,
-    WebRTC,
     Stream,
     get_cloudflare_turn_credentials_async,
     wait_for_item,
 )
 from fastrtc.stream import Body as RTCBody
 from gradio.utils import get_space
+from pydantic import BaseModel
 from websockets.asyncio.client import connect
-import ssl
-import certifi
-
-import cv2
-import subprocess
-import shutil
 
 load_dotenv()
 
@@ -157,7 +155,9 @@ async def verify_websocket_auth(websocket: WebSocket) -> bool:
         try:
             credentials = base64.b64decode(token).decode("utf-8")
             username, password = credentials.split(":", 1)
-            if secrets.compare_digest(username, AUTH_USER) and secrets.compare_digest(password, AUTH_PASS):
+            if secrets.compare_digest(username, AUTH_USER) and secrets.compare_digest(
+                password, AUTH_PASS
+            ):
                 return True
         except Exception:
             pass
@@ -168,7 +168,9 @@ async def verify_websocket_auth(websocket: WebSocket) -> bool:
         try:
             credentials = base64.b64decode(auth_header[6:]).decode("utf-8")
             username, password = credentials.split(":", 1)
-            if secrets.compare_digest(username, AUTH_USER) and secrets.compare_digest(password, AUTH_PASS):
+            if secrets.compare_digest(username, AUTH_USER) and secrets.compare_digest(
+                password, AUTH_PASS
+            ):
                 return True
         except Exception:
             pass
@@ -211,7 +213,7 @@ LANG_MAP = {
     "ar": "Arabic",
     "hi": "Hindi",
     "el": "Greek",
-    "tr": "Turkish"
+    "tr": "Turkish",
 }
 LANG_MAP_REVERSE = {v: k for k, v in LANG_MAP.items()}
 
@@ -223,15 +225,53 @@ pending_session_id = None
 # TARGET_LANGUAGES = ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar"]
 
 # Spanish first for news monitoring default
-SRC_LANGUAGES = [LANG_MAP[code] for code in ["es", "en", "zh", "pt", "fr", "de", "ru", "it", "ko", "ja", "yue", "id", "vi", "th", "ar", "hi", "el", "tr"]]
-TARGET_LANGUAGES = [LANG_MAP[code] for code in ["en", "zh", "ru", "fr", "de", "pt", "es", "it", "ko", "ja", "yue", "id", "vi", "th", "ar"]]
+SRC_LANGUAGES = [
+    LANG_MAP[code]
+    for code in [
+        "es",
+        "en",
+        "zh",
+        "pt",
+        "fr",
+        "de",
+        "ru",
+        "it",
+        "ko",
+        "ja",
+        "yue",
+        "id",
+        "vi",
+        "th",
+        "ar",
+        "hi",
+        "el",
+        "tr",
+    ]
+]
+TARGET_LANGUAGES = [
+    LANG_MAP[code]
+    for code in [
+        "en",
+        "zh",
+        "ru",
+        "fr",
+        "de",
+        "pt",
+        "es",
+        "it",
+        "ko",
+        "ja",
+        "yue",
+        "id",
+        "vi",
+        "th",
+        "ar",
+    ]
+]
 
 
 class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
-    # Pre-computed silent audio frame (1 second of silence at 16kHz, mono, int16)
-    # 16000 samples * 2 bytes = 32000 bytes of zeros
-    SILENT_AUDIO_1S = base64.b64encode(np.zeros(16000, dtype=np.int16).tobytes()).decode()
-    # Shorter keepalive (100ms of silence) - less data, more frequent
+    # Pre-computed silent audio (100ms at 16kHz, mono, int16) - class constant
     SILENT_AUDIO_100MS = base64.b64encode(np.zeros(1600, dtype=np.int16).tobytes()).decode()
 
     def __init__(self, session_config: dict = None, session_id: str = None) -> None:
@@ -245,13 +285,13 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         self.output_queue = asyncio.Queue(maxsize=100)
         self.video_queue = asyncio.Queue(maxsize=10)
 
-        self.last_send_time = 0.0     # Last send timestamp
-        self.video_interval = 0.5     # Interval in seconds (match reference: 2fps for context)
+        self.last_send_time = 0.0  # Last send timestamp
+        self.video_interval = 0.5  # Interval in seconds (match reference: 2fps for context)
         self.latest_frame = None
 
         self.awaiting_new_message = True
         self.stable_text = ""  # Confirmed text (black)
-        self.temp_text = ""    # Interim text (gray)
+        self.temp_text = ""  # Interim text (gray)
         # Source language transcript (English input)
         self.source_text = ""
         self.source_temp = ""
@@ -264,22 +304,28 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         self.keepalive_task = None
         self.running = False  # Flag to stop keepalive on shutdown
 
+        # Per-instance message counter (not shared across sessions)
+        self._msg_counter = 0
+
         # Session-specific config (avoids race conditions with concurrent users)
         self.session_config = session_config or {
             "src_language": "Spanish",
             "target_language": "English",
-            "voice": "Nofish"
+            "voice": "Nofish",
         }
-        print(f"🔧 LiveTranslateHandler.__init__() complete, session_id: {session_id}, config: {self.session_config}")
-
+        print(
+            f"🔧 LiveTranslateHandler.__init__() complete, session_id: {session_id}, config: {self.session_config}"
+        )
 
     def copy(self):
         global pending_session_id
-        print(f"🔧 LiveTranslateHandler.copy() called - creating new handler instance, pending_session_id: {pending_session_id}")
+        print(
+            f"🔧 LiveTranslateHandler.copy() called - creating new handler instance, pending_session_id: {pending_session_id}"
+        )
         # Pass session config and pending session_id to the new handler instance
         new_handler = LiveTranslateHandler(
             session_config=self.session_config.copy() if self.session_config else None,
-            session_id=pending_session_id
+            session_id=pending_session_id,
         )
         # Register handler if we have a session_id
         if pending_session_id:
@@ -287,34 +333,37 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             pending_session_id = None  # Clear pending
         return new_handler
 
-    _msg_counter = 0
-
-    @classmethod
-    def msg_id(cls) -> str:
-        cls._msg_counter += 1
-        return f"evt_{cls._msg_counter}"
+    def msg_id(self) -> str:
+        """Generate unique event ID for this session."""
+        self._msg_counter += 1
+        return f"evt_{self._msg_counter}"
 
     async def _keepalive_loop(self):
-        """Send silent audio every 2 seconds if no real audio received.
+        """Send silent audio regularly when no real audio is flowing.
 
-        This keeps the API connection alive indefinitely, avoiding the ~30s
-        timeout that causes "Response timeout" disconnections.
+        This keeps the API connection alive and the translation pipeline primed,
+        ensuring instant response when real audio starts.
         """
         print("🔄 Keepalive loop started")
         while self.running:
             try:
-                await asyncio.sleep(2.0)  # Check every 2 seconds
-                if not self.running or self.connection is None:
+                await asyncio.sleep(0.5)  # Check frequently
+                # Capture connection locally to avoid race condition with shutdown
+                conn = self.connection
+                if not self.running or conn is None:
                     break
 
-                # If no audio received in last 3 seconds, send silent audio
+                # If no real audio in last 0.5 seconds, send keepalive silence
+                # This keeps the pipeline warm and ready for instant response
                 now = time.time()
-                if now - self.last_audio_time > 3.0:
+                if now - self.last_audio_time > 0.5:
                     # Send 100ms of silence to keep connection alive
-                    msg = f'{{"event_id":"evt_{self._msg_counter}","type":"input_audio_buffer.append","audio":"{self.SILENT_AUDIO_100MS}"}}'
                     self._msg_counter += 1
-                    await self.connection.send(msg)
-                    print("🔇 Sent keepalive silence")
+                    msg = f'{{"event_id":"evt_{self._msg_counter}","type":"input_audio_buffer.append","audio":"{self.SILENT_AUDIO_100MS}"}}'
+                    await conn.send(msg)
+                    # Only log occasionally to reduce noise
+                    if self._msg_counter % 20 == 0:
+                        print("🔇 Keepalive active (no real audio)")
             except Exception as e:
                 if self.running:
                     print(f"⚠️ Keepalive error: {e}")
@@ -335,13 +384,19 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             src_language_code = LANG_MAP_REVERSE.get(src_language_name, "en")
             target_language_code = LANG_MAP_REVERSE.get(target_language_name, "es")
 
-            print(f"🌐 Translation: {src_language_name} ({src_language_code}) -> {target_language_name} ({target_language_code}), Voice: {voice_id}")
+            print(
+                f"🌐 Translation: {src_language_name} ({src_language_code}) -> {target_language_name} ({target_language_code}), Voice: {voice_id}"
+            )
 
             if src_language_code == target_language_code:
-                print(f"⚠️ Source and target language are the same ({target_language_name}), running in echo mode")
+                print(
+                    f"⚠️ Source and target language are the same ({target_language_name}), running in echo mode"
+                )
 
             print(f"🔌 Connecting to Hanzo WebSocket: {TRANSLATE_API_URL[:50]}...")
-            async with connect(TRANSLATE_API_URL, additional_headers=headers, ssl=ssl_context) as conn:
+            async with connect(
+                TRANSLATE_API_URL, additional_headers=headers, ssl=ssl_context
+            ) as conn:
                 print("✅ Hanzo WebSocket connected!")
                 self.client = conn
                 session_update_msg = {
@@ -352,13 +407,11 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                         "voice": voice_id,
                         "input_audio_format": "pcm16",
                         "output_audio_format": "pcm16",
-                        "input_audio_transcription": {
-                            "language": src_language_code
-                        },
+                        "input_audio_transcription": {"language": src_language_code},
                         "translation": {
                             "source_language": src_language_code,
-                            "language": target_language_code
-                        }
+                            "language": target_language_code,
+                        },
                     },
                 }
                 print(f"📤 Sending session.update: {json.dumps(session_update_msg, indent=2)}")
@@ -374,24 +427,33 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
                 # Each WebSocket response (data) is a JSON event representing translation progress
                 async for data in self.connection:
-                    print(f"📨 Hanzo response: {data[:200]}..." if len(data) > 200 else f"📨 Hanzo response: {data}")
+                    print(
+                        f"📨 Hanzo response: {data[:200]}..."
+                        if len(data) > 200
+                        else f"📨 Hanzo response: {data}"
+                    )
                     event = json.loads(data)
                     if "type" not in event:
                         continue
                     event_type = event["type"]
 
                     # Handle source language transcription (input)
-                    if event_type in ("input_audio_transcript.delta", "input_audio_transcript.text"):
+                    if event_type in (
+                        "input_audio_transcript.delta",
+                        "input_audio_transcript.text",
+                    ):
                         self.source_text = event.get("text", "") or ""
                         self.source_temp = event.get("stash", "") or ""
                         print(f"[SOURCE] {self.source_text} {self.source_temp}")
                         # Send source transcript to client
                         await self.output_queue.put(
-                            AdditionalOutputs({
-                                "role": "source",
-                                "source_content": f"{self.source_text}{self.source_temp}",
-                                "update": True
-                            })
+                            AdditionalOutputs(
+                                {
+                                    "role": "source",
+                                    "source_content": f"{self.source_text}{self.source_temp}",
+                                    "update": True,
+                                }
+                            )
                         )
 
                     elif event_type == "input_audio_transcript.done":
@@ -401,11 +463,9 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                             self.source_text = transcript
                             self.source_temp = ""
                             await self.output_queue.put(
-                                AdditionalOutputs({
-                                    "role": "source",
-                                    "source_content": transcript,
-                                    "update": True
-                                })
+                                AdditionalOutputs(
+                                    {"role": "source", "source_content": transcript, "update": True}
+                                )
                             )
 
                     elif event_type in ("response.text.text", "response.audio_transcript.text"):
@@ -418,14 +478,16 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                         print(f"[STABLE] {self.stable_text}")
                         print(f"[TEMP] {self.temp_text}")
                         await self.output_queue.put(
-                            AdditionalOutputs({
-                                "role": "assistant",
-                                # Stable text is black, interim text is gray
-                                "content": f"<span style='color:black'>{self.stable_text}</span>"
-                                        f"<span style='color:gray'>{self.temp_text}</span>",
-                                "update": True,
-                                "new_message": self.awaiting_new_message
-                            })
+                            AdditionalOutputs(
+                                {
+                                    "role": "assistant",
+                                    # Stable text is black, interim text is gray
+                                    "content": f"<span style='color:black'>{self.stable_text}</span>"
+                                    f"<span style='color:gray'>{self.temp_text}</span>",
+                                    "update": True,
+                                    "new_message": self.awaiting_new_message,
+                                }
+                            )
                         )
                         self.awaiting_new_message = False
 
@@ -436,12 +498,14 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                             self.stable_text = transcript
                             self.temp_text = ""
                             await self.output_queue.put(
-                                AdditionalOutputs({
-                                    "role": "assistant",
-                                    "content": f"<span style='color:black'>{self.stable_text}</span>",
-                                    "update": True,
-                                    "new_message": self.awaiting_new_message
-                                })
+                                AdditionalOutputs(
+                                    {
+                                        "role": "assistant",
+                                        "content": f"<span style='color:black'>{self.stable_text}</span>",
+                                        "update": True,
+                                        "new_message": self.awaiting_new_message,
+                                    }
+                                )
                             )
                         # Start new message bubble
                         self.awaiting_new_message = True
@@ -453,13 +517,10 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                         if audio_b64:
                             audio_data = base64.b64decode(audio_b64)
                             audio_array = np.frombuffer(audio_data, dtype=np.int16).reshape(1, -1)
-                            await self.output_queue.put(
-                                (self.output_sample_rate, audio_array)
-                            )
+                            await self.output_queue.put((self.output_sample_rate, audio_array))
                             # Publish to HTTP audio stream subscribers for broadcast output
                             # Uses session_id for proper routing to concurrent sessions
                             await publish_audio_to_subscribers(audio_data, self.session_id)
-
 
         except Exception as e:
             print(f"Connection error: {e}")
@@ -522,20 +583,32 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             return self.latest_frame
         return np.zeros((100, 100, 3), dtype=np.uint8)
 
-
     async def receive(self, frame):
         # Audio receive - send immediately with minimal overhead
-        if self.connection is None:
+        # Capture connection locally to avoid race condition
+        conn = self.connection
+        if conn is None:
             return
-        # Update last audio time for keepalive tracking
-        self.last_audio_time = time.time()
+
         sr, array = frame
-        audio_b64 = base64.b64encode(array.squeeze().tobytes()).decode()
+        audio_data = array.squeeze()
+
+        # Skip silent frames to prevent buffer buildup when source is paused
+        # This ensures instant response when audio resumes (no backlog)
+        # RMS threshold 50 for int16 audio (~-56 dBFS, well below quiet speech)
+        rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
+        if rms < 50:
+            # Silent frame - don't send, let keepalive handle connection
+            return
+
+        # Update last audio time for keepalive tracking (only for real audio)
+        self.last_audio_time = time.time()
+
+        self._msg_counter += 1
+        audio_b64 = base64.b64encode(audio_data.tobytes()).decode()
         # Use string formatting instead of json.dumps for speed
         msg = f'{{"event_id":"evt_{self._msg_counter}","type":"input_audio_buffer.append","audio":"{audio_b64}"}}'
-        self._msg_counter += 1
-        await self.connection.send(msg)
-
+        await conn.send(msg)
 
     async def emit(self) -> tuple[int, np.ndarray] | AdditionalOutputs | None:
         return await wait_for_item(self.output_queue)
@@ -559,7 +632,10 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             video_subscribers.pop(self.session_id, None)
 
         if self.connection:
-            await self.connection.close()
+            try:
+                await self.connection.close()
+            except Exception:
+                pass  # Connection may already be closed
             self.connection = None
 
         # Clear queues
@@ -594,19 +670,18 @@ def update_chatbot(chatbot: list[dict], response: dict):
     return chatbot
 
 
-
 chatbot = gr.Chatbot(type="messages", allow_tags=False)
 src_language = gr.Dropdown(
     choices=SRC_LANGUAGES,
-    value="Spanish",   # Default to Spanish for news monitoring
+    value="Spanish",  # Default to Spanish for news monitoring
     type="value",
-    label="Source Language"
+    label="Source Language",
 )
 language = gr.Dropdown(
     choices=TARGET_LANGUAGES,
-    value="English",   # Default to English output
+    value="English",  # Default to English output
     type="value",
-    label="Target Language"
+    label="Target Language",
 )
 voice = gr.Dropdown(choices=VOICES, value=VOICES[0], type="value", label="Voice")
 # video_flag = gr.Dropdown(
@@ -634,6 +709,7 @@ stream = Stream(
     concurrency_limit=1000,
     time_limit=86400,  # 24 hours
 )
+
 
 # Frontend UI customization
 def enhance_ui():
@@ -692,8 +768,13 @@ def enhance_ui():
         """)
     return demo
 
+
 # Generate dynamic documentation based on environment
-auth_header = f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}" if AUTH_ENABLED else "No authentication required"
+auth_header = (
+    f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}"
+    if AUTH_ENABLED
+    else "No authentication required"
+)
 ws_url = BASE_URL.replace("https", "wss").replace("http", "ws")
 
 # Build documentation string separately to avoid f-string issues
@@ -721,7 +802,7 @@ curl -H '{auth_header}' \\
      {BASE_URL}/audio/stream/SESSION_ID
 ```"""
 else:
-    auth_section = """No authentication required - open access
+    auth_section = f"""No authentication required - open access
 
 ## API Examples:
 ```bash
@@ -733,7 +814,7 @@ wscat -c '{ws_url}/v1/realtime'
 
 # Stream audio output (replace SESSION_ID with actual session)
 curl {BASE_URL}/audio/stream/SESSION_ID
-```""".format(BASE_URL=BASE_URL, ws_url=ws_url)
+```"""
 
 app_description = f"""
 # Zen Live - Real-time Speech Translation API
@@ -787,16 +868,13 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
-    license_info={
-        "name": "Apache 2.0",
-        "url": "https://www.apache.org/licenses/LICENSE-2.0"
-    },
+    license_info={"name": "Apache 2.0", "url": "https://www.apache.org/licenses/LICENSE-2.0"},
     contact={
         "name": "Zen Live Support",
         "url": "https://github.com/zenlm/zen-live",
-        "email": "support@hanzo.ai"
+        "email": "support@hanzo.ai",
     },
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # CORS for control room access from different domains
@@ -825,7 +903,11 @@ active_sessions = {}
 # Session configs indexed by session_id - used by handlers to get their config
 session_configs = {}
 # Current session config for single-instance mode (fallback)
-current_session_config = {"src_language": "Spanish", "target_language": "English", "voice": "Nofish"}
+current_session_config = {
+    "src_language": "Spanish",
+    "target_language": "English",
+    "voice": "Nofish",
+}
 # Session timeout in seconds (cleanup after 1 hour of inactivity)
 SESSION_TIMEOUT = 3600
 
@@ -870,14 +952,11 @@ async def webrtc_offer(offer: WebRTCOffer):
         session_config = {
             "src_language": offer.src_language,
             "target_language": offer.target_language,
-            "voice": offer.voice
+            "voice": offer.voice,
         }
 
         # Store session config
-        active_sessions[session_id] = {
-            **session_config,
-            "created_at": time.time()
-        }
+        active_sessions[session_id] = {**session_config, "created_at": time.time()}
 
         # Store session config by ID so handler can look it up
         session_configs[session_id] = session_config.copy()
@@ -888,15 +967,12 @@ async def webrtc_offer(offer: WebRTCOffer):
         # Set pending session_id so handler.copy() can pick it up
         pending_session_id = session_id
 
-        print(f"📡 WebRTC offer received: {offer.src_language} -> {offer.target_language}, voice: {offer.voice}")
+        print(
+            f"📡 WebRTC offer received: {offer.src_language} -> {offer.target_language}, voice: {offer.voice}"
+        )
 
         # Use FastRTC's internal offer handling with proper Body object
-        rtc_body = RTCBody(
-            sdp=offer.sdp,
-            type=offer.type,
-            webrtc_id=session_id,
-            candidate=None
-        )
+        rtc_body = RTCBody(sdp=offer.sdp, type=offer.type, webrtc_id=session_id, candidate=None)
         print(f"📤 Calling stream.offer with session_id: {session_id}")
         response = await stream.offer(rtc_body)
         print(f"📥 stream.offer response type: {type(response)}")
@@ -905,7 +981,7 @@ async def webrtc_offer(offer: WebRTCOffer):
         # Handle response - FastRTC returns dict on success, JSONResponse on error
         if isinstance(response, JSONResponse):
             # FastRTC returned an error response, pass it through
-            print(f"📥 FastRTC returned JSONResponse (error case)")
+            print("📥 FastRTC returned JSONResponse (error case)")
             return response
         elif isinstance(response, dict):
             sdp = response.get("sdp", "")
@@ -914,13 +990,14 @@ async def webrtc_offer(offer: WebRTCOffer):
         else:
             # Unexpected response type - try to handle it
             print(f"⚠️ Unexpected response type: {type(response)}")
-            if hasattr(response, 'body'):
+            if hasattr(response, "body"):
                 # It might be a Response object
                 import json
+
                 body = response.body.decode() if isinstance(response.body, bytes) else response.body
                 try:
                     data = json.loads(body)
-                    if 'error' in data or 'status' in data:
+                    if "error" in data or "status" in data:
                         return response
                     sdp = data.get("sdp", "")
                     resp_type = data.get("type", "answer")
@@ -937,19 +1014,13 @@ async def webrtc_offer(offer: WebRTCOffer):
         if not sdp:
             raise ValueError("No SDP in response - FastRTC may have returned an error")
 
-        return JSONResponse({
-            "sdp": sdp,
-            "type": resp_type,
-            "webrtc_id": webrtc_id
-        })
+        return JSONResponse({"sdp": sdp, "type": resp_type, "webrtc_id": webrtc_id})
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         print(f"WebRTC offer error: {e}")
-        return JSONResponse(
-            {"error": str(e), "type": "error"},
-            status_code=500
-        )
+        return JSONResponse({"error": str(e), "type": "error"}, status_code=500)
 
 
 # WHIP endpoint for external WebRTC ingestion (broadcaster-friendly)
@@ -958,6 +1029,7 @@ whip_sessions = {}  # session_id -> session config
 
 class WHIPOffer(BaseModel):
     """WHIP offer model for external stream ingestion."""
+
     sdp: str
     type: str = "offer"
 
@@ -968,7 +1040,7 @@ async def whip_ingest(
     src_language: str = "Spanish",
     target_language: str = "English",
     voice: str = "Cherry",
-    _auth: bool = Depends(optional_auth)
+    _auth: bool = Depends(optional_auth),
 ):
     """
     WHIP (WebRTC-HTTP Ingestion Protocol) endpoint for broadcaster ingestion.
@@ -1012,18 +1084,13 @@ async def whip_ingest(
         "target_language": target_language,
         "voice": voice,
         "created_at": time.time(),
-        "type": "whip_ingest"
+        "type": "whip_ingest",
     }
 
     try:
         # Use FastRTC's internal offer handling with proper Body object
         whip_session_id = secrets.token_hex(16)
-        rtc_body = RTCBody(
-            sdp=sdp,
-            type="offer",
-            webrtc_id=whip_session_id,
-            candidate=None
-        )
+        rtc_body = RTCBody(sdp=sdp, type="offer", webrtc_id=whip_session_id, candidate=None)
         response = await stream.offer(rtc_body)
 
         # Return SDP answer per WHIP spec
@@ -1034,8 +1101,8 @@ async def whip_ingest(
             headers={
                 "Location": f"/whip/{session_id}",
                 "ETag": f'"{session_id}"',
-                "Accept-Patch": "application/trickle-ice-sdpfrag"
-            }
+                "Accept-Patch": "application/trickle-ice-sdpfrag",
+            },
         )
     except Exception as e:
         print(f"WHIP error: {e}")
@@ -1065,9 +1132,7 @@ async def whip_ice_trickle(session_id: str, request: Request, _auth: bool = Depe
 # WHEP endpoint for external WebRTC consumption
 @app.post("/whep")
 async def whep_consume(
-    request: Request,
-    session_id: str = None,
-    _auth: bool = Depends(optional_auth)
+    request: Request, session_id: str = None, _auth: bool = Depends(optional_auth)
 ):
     """
     WHEP (WebRTC-HTTP Egress Protocol) endpoint for stream consumption.
@@ -1093,22 +1158,14 @@ async def whep_consume(
 
     try:
         # Create answer for consumer with proper Body object
-        rtc_body = RTCBody(
-            sdp=sdp,
-            type="offer",
-            webrtc_id=consumer_id,
-            candidate=None
-        )
+        rtc_body = RTCBody(sdp=sdp, type="offer", webrtc_id=consumer_id, candidate=None)
         response = await stream.offer(rtc_body)
 
         return StreamingResponse(
             content=response["sdp"],
             media_type="application/sdp",
             status_code=201,
-            headers={
-                "Location": f"/whep/{consumer_id}",
-                "ETag": f'"{consumer_id}"'
-            }
+            headers={"Location": f"/whep/{consumer_id}", "ETag": f'"{consumer_id}"'},
         )
     except Exception as e:
         print(f"WHEP error: {e}")
@@ -1119,50 +1176,61 @@ async def whep_consume(
 async def list_sessions():
     """List active translation sessions for control room monitoring."""
     all_sessions = {**active_sessions, **whip_sessions}
-    return JSONResponse({
-        "sessions": [
-            {
-                "id": sid,
-                "src_language": data["src_language"],
-                "target_language": data["target_language"],
-                "voice": data["voice"],
-                "uptime": time.time() - data["created_at"],
-                "type": data.get("type", "webrtc")
-            }
-            for sid, data in all_sessions.items()
-        ]
-    })
+    return JSONResponse(
+        {
+            "sessions": [
+                {
+                    "id": sid,
+                    "src_language": data["src_language"],
+                    "target_language": data["target_language"],
+                    "voice": data["voice"],
+                    "uptime": time.time() - data["created_at"],
+                    "type": data.get("type", "webrtc"),
+                }
+                for sid, data in all_sessions.items()
+            ]
+        }
+    )
 
 
 @app.get("/api/status")
 async def api_status():
     """API health check for control room monitoring."""
-    return JSONResponse({
-        "status": "healthy",
-        "service": "zen-live-translate",
-        "version": "1.0.0",
-        "base_url": BASE_URL,
-        "active_sessions": len(active_sessions),
-        "authentication": {
-            "enabled": AUTH_ENABLED,
-            "type": "HTTP Basic Auth" if AUTH_ENABLED else "None",
-            "header": "Authorization: Basic <base64(username:password)>" if AUTH_ENABLED else None,
-            "curl_example": f"curl -u '<username>:<password>' {BASE_URL}/api/status" if AUTH_ENABLED else f"curl {BASE_URL}/api/status",
-            "websocket_example": f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime' -H 'Authorization: Basic <base64>'" if AUTH_ENABLED else f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime'"
-        },
-        "supported_languages": {
-            "source": SRC_LANGUAGES,
-            "target": TARGET_LANGUAGES
-        },
-        "voices": VOICES
-    })
+    return JSONResponse(
+        {
+            "status": "healthy",
+            "service": "zen-live-translate",
+            "version": "1.0.0",
+            "base_url": BASE_URL,
+            "active_sessions": len(active_sessions),
+            "authentication": {
+                "enabled": AUTH_ENABLED,
+                "type": "HTTP Basic Auth" if AUTH_ENABLED else "None",
+                "header": "Authorization: Basic <base64(username:password)>"
+                if AUTH_ENABLED
+                else None,
+                "curl_example": f"curl -u '<username>:<password>' {BASE_URL}/api/status"
+                if AUTH_ENABLED
+                else f"curl {BASE_URL}/api/status",
+                "websocket_example": f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime' -H 'Authorization: Basic <base64>'"
+                if AUTH_ENABLED
+                else f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime'",
+            },
+            "supported_languages": {"source": SRC_LANGUAGES, "target": TARGET_LANGUAGES},
+            "voices": VOICES,
+        }
+    )
 
 
 @app.get("/monitor")
 async def monitor_page(request: Request, _auth: bool = Depends(optional_auth)):
     """Simplified monitor-only view for control room displays."""
     rtc_config = await get_cloudflare_turn_credentials_async() if get_space() else None
-    html_content = (cur_dir / "monitor.html").read_text() if (cur_dir / "monitor.html").exists() else (cur_dir / "index.html").read_text()
+    html_content = (
+        (cur_dir / "monitor.html").read_text()
+        if (cur_dir / "monitor.html").exists()
+        else (cur_dir / "index.html").read_text()
+    )
     html_content = html_content.replace("__RTC_CONFIGURATION__", json.dumps(rtc_config))
     return HTMLResponse(content=html_content)
 
@@ -1239,6 +1307,7 @@ async def audio_stream(webrtc_id: str):
     ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/stream/ID \
            -c:a aac -f mpegts srt://dest:port
     """
+
     async def generate_audio():
         queue = asyncio.Queue(maxsize=50)  # ~2 seconds of audio buffer
         if webrtc_id not in audio_subscribers:
@@ -1250,9 +1319,9 @@ async def audio_stream(webrtc_id: str):
                 try:
                     audio_data = await asyncio.wait_for(queue.get(), timeout=30.0)
                     yield audio_data
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Send silence to keep connection alive
-                    yield b'\x00' * 4800  # 100ms of silence at 24kHz
+                    yield b"\x00" * 4800  # 100ms of silence at 24kHz
         finally:
             if webrtc_id in audio_subscribers:
                 try:
@@ -1267,8 +1336,8 @@ async def audio_stream(webrtc_id: str):
             "Content-Type": "audio/L16;rate=24000;channels=1",
             "Cache-Control": "no-cache",
             "X-Audio-Format": "PCM16 24kHz Mono",
-            "Access-Control-Allow-Origin": "*"
-        }
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 
@@ -1280,23 +1349,57 @@ async def audio_wav_stream(webrtc_id: str):
     Includes WAV header for compatibility with more players/converters.
     Useful for direct monitoring or conversion to broadcast formats.
     """
+
     async def generate_wav():
         # Send WAV header for streaming (size = max)
-        wav_header = bytes([
-            0x52, 0x49, 0x46, 0x46,  # "RIFF"
-            0xFF, 0xFF, 0xFF, 0x7F,  # Size (max for streaming)
-            0x57, 0x41, 0x56, 0x45,  # "WAVE"
-            0x66, 0x6D, 0x74, 0x20,  # "fmt "
-            0x10, 0x00, 0x00, 0x00,  # Subchunk1Size (16)
-            0x01, 0x00,              # AudioFormat (1 = PCM)
-            0x01, 0x00,              # NumChannels (1)
-            0xC0, 0x5D, 0x00, 0x00,  # SampleRate (24000)
-            0x80, 0xBB, 0x00, 0x00,  # ByteRate (48000)
-            0x02, 0x00,              # BlockAlign (2)
-            0x10, 0x00,              # BitsPerSample (16)
-            0x64, 0x61, 0x74, 0x61,  # "data"
-            0xFF, 0xFF, 0xFF, 0x7F,  # Subchunk2Size (max)
-        ])
+        wav_header = bytes(
+            [
+                0x52,
+                0x49,
+                0x46,
+                0x46,  # "RIFF"
+                0xFF,
+                0xFF,
+                0xFF,
+                0x7F,  # Size (max for streaming)
+                0x57,
+                0x41,
+                0x56,
+                0x45,  # "WAVE"
+                0x66,
+                0x6D,
+                0x74,
+                0x20,  # "fmt "
+                0x10,
+                0x00,
+                0x00,
+                0x00,  # Subchunk1Size (16)
+                0x01,
+                0x00,  # AudioFormat (1 = PCM)
+                0x01,
+                0x00,  # NumChannels (1)
+                0xC0,
+                0x5D,
+                0x00,
+                0x00,  # SampleRate (24000)
+                0x80,
+                0xBB,
+                0x00,
+                0x00,  # ByteRate (48000)
+                0x02,
+                0x00,  # BlockAlign (2)
+                0x10,
+                0x00,  # BitsPerSample (16)
+                0x64,
+                0x61,
+                0x74,
+                0x61,  # "data"
+                0xFF,
+                0xFF,
+                0xFF,
+                0x7F,  # Subchunk2Size (max)
+            ]
+        )
         yield wav_header
 
         queue = asyncio.Queue(maxsize=50)  # ~2 seconds of audio buffer
@@ -1309,8 +1412,8 @@ async def audio_wav_stream(webrtc_id: str):
                 try:
                     audio_data = await asyncio.wait_for(queue.get(), timeout=30.0)
                     yield audio_data
-                except asyncio.TimeoutError:
-                    yield b'\x00' * 4800
+                except TimeoutError:
+                    yield b"\x00" * 4800
         finally:
             if webrtc_id in audio_subscribers:
                 try:
@@ -1321,10 +1424,7 @@ async def audio_wav_stream(webrtc_id: str):
     return StreamingResponse(
         generate_wav(),
         media_type="audio/wav",
-        headers={
-            "Cache-Control": "no-cache",
-            "Access-Control-Allow-Origin": "*"
-        }
+        headers={"Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*"},
     )
 
 
@@ -1339,6 +1439,7 @@ async def audio_broadcast_stream():
     Usage:
         ffmpeg -f s16le -ar 24000 -ac 1 -i http://host/audio/broadcast -c:a aac -f mpegts srt://dest:port
     """
+
     async def generate_audio():
         queue = asyncio.Queue(maxsize=100)  # Buffer up to 100 chunks
         all_audio_subscribers.append(queue)
@@ -1348,9 +1449,9 @@ async def audio_broadcast_stream():
                 try:
                     audio_data = await asyncio.wait_for(queue.get(), timeout=30.0)
                     yield audio_data
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Send silence to keep connection alive
-                    yield b'\x00' * 4800  # 100ms of silence at 24kHz
+                    yield b"\x00" * 4800  # 100ms of silence at 24kHz
         finally:
             all_audio_subscribers.remove(queue)
 
@@ -1361,8 +1462,8 @@ async def audio_broadcast_stream():
             "Content-Type": "audio/L16;rate=24000;channels=1",
             "Cache-Control": "no-cache",
             "X-Audio-Format": "PCM16 24kHz Mono",
-            "Access-Control-Allow-Origin": "*"
-        }
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 
@@ -1378,6 +1479,7 @@ async def video_stream(session_id: str):
         <img src="/video/stream/SESSION_ID">
         ffplay -f mjpeg http://host/video/stream/SESSION_ID
     """
+
     async def generate_mjpeg():
         queue = asyncio.Queue(maxsize=5)  # Small buffer for low latency
         if session_id not in video_subscribers:
@@ -1389,13 +1491,13 @@ async def video_stream(session_id: str):
                 try:
                     jpeg_data = await asyncio.wait_for(queue.get(), timeout=30.0)
                     # MJPEG multipart format
-                    yield b'--frame\r\n'
-                    yield b'Content-Type: image/jpeg\r\n\r\n'
+                    yield b"--frame\r\n"
+                    yield b"Content-Type: image/jpeg\r\n\r\n"
                     yield jpeg_data
-                    yield b'\r\n'
-                except asyncio.TimeoutError:
+                    yield b"\r\n"
+                except TimeoutError:
                     # Keep connection alive with empty boundary
-                    yield b'--frame\r\n\r\n'
+                    yield b"--frame\r\n\r\n"
         finally:
             if session_id in video_subscribers:
                 video_subscribers[session_id].remove(queue)
@@ -1407,8 +1509,8 @@ async def video_stream(session_id: str):
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0",
-            "Access-Control-Allow-Origin": "*"
-        }
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 
@@ -1417,82 +1519,92 @@ async def broadcast_info():
     """
     Information for broadcast engineers on how to integrate.
     """
-    return JSONResponse({
-        "service": "Zen Live Translate - Broadcast Integration",
-        "endpoints": {
-            "control_room_ui": f"{BASE_URL}/",
-            "monitor_only": f"{BASE_URL}/monitor?autostart=1",
-            "remote_view": f"{BASE_URL}/view?session={{SESSION_ID}}",
-            "webrtc_offer": f"{BASE_URL}/webrtc/offer",
-            "whip_ingest": f"{BASE_URL}/whip?src_language=Spanish&target_language=English",
-            "whep_consume": f"{BASE_URL}/whep",
-            "transcript_sse": f"{BASE_URL}/outputs?webrtc_id={{SESSION_ID}}",
-            "video_mjpeg": f"{BASE_URL}/video/stream/{{SESSION_ID}}",
-            "audio_pcm": f"{BASE_URL}/audio/stream/{{SESSION_ID}}",
-            "audio_wav": f"{BASE_URL}/audio/wav/{{SESSION_ID}}",
-            "audio_broadcast": f"{BASE_URL}/audio/broadcast",
-            "api_status": f"{BASE_URL}/api/status",
-            "api_sessions": f"{BASE_URL}/api/sessions"
-        },
-        "whip_whep": {
-            "description": "Standard WebRTC ingestion/egress protocols for professional broadcast",
-            "whip_enabled": WHIP_ENABLED,
-            "whip_post": "POST /whip with SDP offer (Content-Type: application/sdp)",
-            "whip_params": "?src_language=Spanish&target_language=English&voice=Cherry",
-            "whep_post": "POST /whep with SDP offer to consume translated stream"
-        },
-        "audio_format": {
-            "encoding": "PCM16 signed little-endian",
-            "sample_rate": 24000,
-            "channels": 1,
-            "bits_per_sample": 16
-        },
-        "integration_examples": {
-            "note": "All examples use HTTPS - works through Cloudflare tunnel!",
-            "ffplay_direct": f"ffplay -f s16le -ar 24000 -ac 1 {BASE_URL}/audio/stream/SESSION_ID",
-            "ffplay_broadcast": f"ffplay -f s16le -ar 24000 -ac 1 {BASE_URL}/audio/broadcast",
-            "ffmpeg_to_srt": f"ffmpeg -f s16le -ar 24000 -ac 1 -i {BASE_URL}/audio/broadcast -c:a aac -f mpegts 'srt://your-dest:port'",
-            "ffmpeg_to_rtmp": f"ffmpeg -f s16le -ar 24000 -ac 1 -i {BASE_URL}/audio/broadcast -c:a aac -f flv rtmp://your-server/live/stream",
-            "ffmpeg_to_ndi": f"ffmpeg -f s16le -ar 24000 -ac 1 -i {BASE_URL}/audio/broadcast -f libndi_newtek -clock_video true 'ZEN-LIVE-TRANSLATED'",
-            "obs_browser": f"Add Browser Source with URL: {BASE_URL}/monitor?autostart=1",
-            "vlc": f"vlc {BASE_URL}/audio/wav/SESSION_ID",
-            "curl_test": f"curl -N {BASE_URL}/audio/broadcast | ffplay -f s16le -ar 24000 -ac 1 -"
-        },
-        "cloudflare_tunnel_notes": {
-            "https_works": "All HTTP/HTTPS endpoints work through Cloudflare tunnel",
-            "websocket_works": "WebSocket (wss://) works through Cloudflare tunnel",
-            "srt_rtmp_input_needs_direct": "SRT/RTMP INPUT requires direct server access (not via tunnel)",
-            "srt_rtmp_output_works": "SRT/RTMP OUTPUT works - ffmpeg pulls from HTTPS and pushes to your destination",
-            "recommended_workflow": "Use WHIP for input (WebRTC over HTTPS), use /audio/broadcast for output"
-        },
-        "authentication": {
-            "enabled": AUTH_ENABLED,
-            "type": "HTTP Basic Auth" if AUTH_ENABLED else "None",
-            "header": "Authorization: Basic <base64(username:password)>" if AUTH_ENABLED else None,
-            "username": AUTH_USER if AUTH_ENABLED else None,
-            "example_header": f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}" if AUTH_ENABLED else None,
-            "curl_example": f"curl -u '{AUTH_USER}:{AUTH_PASS}' {BASE_URL}/" if AUTH_ENABLED else f"curl {BASE_URL}/",
-            "websocket_example": f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime' -H 'Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}'" if AUTH_ENABLED else f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime'"
-        },
-        "session_management": {
-            "description": "Each connection creates a unique session identified by webrtc_id/SESSION_ID",
-            "how_to_get_session_id": {
-                "webrtc": "Returned in response to /api/webrtc/offer as 'webrtc_id'",
-                "whip": "Returned in Location header after POST to /whip",
-                "example_response": {"webrtc_id": "abc123def456..."},
+    return JSONResponse(
+        {
+            "service": "Zen Live Translate - Broadcast Integration",
+            "endpoints": {
+                "control_room_ui": f"{BASE_URL}/",
+                "monitor_only": f"{BASE_URL}/monitor?autostart=1",
+                "remote_view": f"{BASE_URL}/view?session={{SESSION_ID}}",
+                "webrtc_offer": f"{BASE_URL}/webrtc/offer",
+                "whip_ingest": f"{BASE_URL}/whip?src_language=Spanish&target_language=English",
+                "whep_consume": f"{BASE_URL}/whep",
+                "transcript_sse": f"{BASE_URL}/outputs?webrtc_id={{SESSION_ID}}",
+                "video_mjpeg": f"{BASE_URL}/video/stream/{{SESSION_ID}}",
+                "audio_pcm": f"{BASE_URL}/audio/stream/{{SESSION_ID}}",
+                "audio_wav": f"{BASE_URL}/audio/wav/{{SESSION_ID}}",
+                "audio_broadcast": f"{BASE_URL}/audio/broadcast",
+                "api_status": f"{BASE_URL}/api/status",
+                "api_sessions": f"{BASE_URL}/api/sessions",
             },
-            "using_session_id": {
-                "transcripts": "GET /outputs?webrtc_id={your_session_id}",
-                "audio_stream": "GET /audio/stream/{your_session_id}",
-                "audio_wav": "GET /audio/wav/{your_session_id}",
-                "note": "Replace {your_session_id} with actual session ID from connection response"
-            }
-        },
-        "latency": {
-            "typical": "200-500ms end-to-end",
-            "factors": ["network RTT", "AI processing", "TTS generation"]
+            "whip_whep": {
+                "description": "Standard WebRTC ingestion/egress protocols for professional broadcast",
+                "whip_enabled": WHIP_ENABLED,
+                "whip_post": "POST /whip with SDP offer (Content-Type: application/sdp)",
+                "whip_params": "?src_language=Spanish&target_language=English&voice=Cherry",
+                "whep_post": "POST /whep with SDP offer to consume translated stream",
+            },
+            "audio_format": {
+                "encoding": "PCM16 signed little-endian",
+                "sample_rate": 24000,
+                "channels": 1,
+                "bits_per_sample": 16,
+            },
+            "integration_examples": {
+                "note": "All examples use HTTPS - works through Cloudflare tunnel!",
+                "ffplay_direct": f"ffplay -f s16le -ar 24000 -ac 1 {BASE_URL}/audio/stream/SESSION_ID",
+                "ffplay_broadcast": f"ffplay -f s16le -ar 24000 -ac 1 {BASE_URL}/audio/broadcast",
+                "ffmpeg_to_srt": f"ffmpeg -f s16le -ar 24000 -ac 1 -i {BASE_URL}/audio/broadcast -c:a aac -f mpegts 'srt://your-dest:port'",
+                "ffmpeg_to_rtmp": f"ffmpeg -f s16le -ar 24000 -ac 1 -i {BASE_URL}/audio/broadcast -c:a aac -f flv rtmp://your-server/live/stream",
+                "ffmpeg_to_ndi": f"ffmpeg -f s16le -ar 24000 -ac 1 -i {BASE_URL}/audio/broadcast -f libndi_newtek -clock_video true 'ZEN-LIVE-TRANSLATED'",
+                "obs_browser": f"Add Browser Source with URL: {BASE_URL}/monitor?autostart=1",
+                "vlc": f"vlc {BASE_URL}/audio/wav/SESSION_ID",
+                "curl_test": f"curl -N {BASE_URL}/audio/broadcast | ffplay -f s16le -ar 24000 -ac 1 -",
+            },
+            "cloudflare_tunnel_notes": {
+                "https_works": "All HTTP/HTTPS endpoints work through Cloudflare tunnel",
+                "websocket_works": "WebSocket (wss://) works through Cloudflare tunnel",
+                "srt_rtmp_input_needs_direct": "SRT/RTMP INPUT requires direct server access (not via tunnel)",
+                "srt_rtmp_output_works": "SRT/RTMP OUTPUT works - ffmpeg pulls from HTTPS and pushes to your destination",
+                "recommended_workflow": "Use WHIP for input (WebRTC over HTTPS), use /audio/broadcast for output",
+            },
+            "authentication": {
+                "enabled": AUTH_ENABLED,
+                "type": "HTTP Basic Auth" if AUTH_ENABLED else "None",
+                "header": "Authorization: Basic <base64(username:password)>"
+                if AUTH_ENABLED
+                else None,
+                "username": AUTH_USER if AUTH_ENABLED else None,
+                "example_header": f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}"
+                if AUTH_ENABLED
+                else None,
+                "curl_example": f"curl -u '{AUTH_USER}:{AUTH_PASS}' {BASE_URL}/"
+                if AUTH_ENABLED
+                else f"curl {BASE_URL}/",
+                "websocket_example": f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime' -H 'Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}'"
+                if AUTH_ENABLED
+                else f"wscat -c '{BASE_URL.replace('https', 'wss').replace('http', 'ws')}/v1/realtime'",
+            },
+            "session_management": {
+                "description": "Each connection creates a unique session identified by webrtc_id/SESSION_ID",
+                "how_to_get_session_id": {
+                    "webrtc": "Returned in response to /api/webrtc/offer as 'webrtc_id'",
+                    "whip": "Returned in Location header after POST to /whip",
+                    "example_response": {"webrtc_id": "abc123def456..."},
+                },
+                "using_session_id": {
+                    "transcripts": "GET /outputs?webrtc_id={your_session_id}",
+                    "audio_stream": "GET /audio/stream/{your_session_id}",
+                    "audio_wav": "GET /audio/wav/{your_session_id}",
+                    "note": "Replace {your_session_id} with actual session ID from connection response",
+                },
+            },
+            "latency": {
+                "typical": "200-500ms end-to-end",
+                "factors": ["network RTT", "AI processing", "TTS generation"],
+            },
         }
-    })
+    )
 
 
 @app.get("/")
@@ -1531,7 +1643,8 @@ def check_ffmpeg():
 
 class StreamingConfig(BaseModel):
     """Configuration for streaming input/output."""
-    session_id: Optional[str] = None
+
+    session_id: str | None = None
     url: str
     src_language: str = "Spanish"
     target_language: str = "English"
@@ -1546,19 +1659,23 @@ async def streaming_status(_auth: bool = Depends(optional_auth)):
     active_streams = []
     for sid, info in streaming_processes.items():
         proc = info.get("process")
-        active_streams.append({
-            "session_id": sid,
-            "type": info.get("type"),
-            "url": info.get("url"),
-            "running": proc.poll() is None if proc else False
-        })
+        active_streams.append(
+            {
+                "session_id": sid,
+                "type": info.get("type"),
+                "url": info.get("url"),
+                "running": proc.poll() is None if proc else False,
+            }
+        )
 
-    return JSONResponse({
-        "ffmpeg_available": ffmpeg_available,
-        "active_streams": active_streams,
-        "supported_inputs": ["srt", "rtmp"] if ffmpeg_available else [],
-        "supported_outputs": ["srt", "rtmp", "ndi"] if ffmpeg_available else []
-    })
+    return JSONResponse(
+        {
+            "ffmpeg_available": ffmpeg_available,
+            "active_streams": active_streams,
+            "supported_inputs": ["srt", "rtmp"] if ffmpeg_available else [],
+            "supported_outputs": ["srt", "rtmp", "ndi"] if ffmpeg_available else [],
+        }
+    )
 
 
 @app.post("/api/streaming/output/start")
@@ -1566,7 +1683,7 @@ async def start_streaming_output(
     session_id: str,
     output_type: str,  # "srt", "rtmp", or "ndi"
     output_url: str,
-    _auth: bool = Depends(optional_auth)
+    _auth: bool = Depends(optional_auth),
 ):
     """
     Start streaming translated audio to SRT/RTMP/NDI destination.
@@ -1585,63 +1702,92 @@ async def start_streaming_output(
         if not output_url.startswith("srt://"):
             raise HTTPException(400, "SRT URL must start with srt://")
         cmd = [
-            "ffmpeg", "-re",
-            "-f", "s16le", "-ar", "24000", "-ac", "1",
-            "-i", audio_url,
-            "-c:a", "aac", "-b:a", "128k",
-            "-f", "mpegts",
-            output_url
+            "ffmpeg",
+            "-re",
+            "-f",
+            "s16le",
+            "-ar",
+            "24000",
+            "-ac",
+            "1",
+            "-i",
+            audio_url,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-f",
+            "mpegts",
+            output_url,
         ]
     elif output_type == "rtmp":
         if not output_url.startswith("rtmp://"):
             raise HTTPException(400, "RTMP URL must start with rtmp://")
         cmd = [
-            "ffmpeg", "-re",
-            "-f", "s16le", "-ar", "24000", "-ac", "1",
-            "-i", audio_url,
-            "-c:a", "aac", "-b:a", "128k",
-            "-f", "flv",
-            output_url
+            "ffmpeg",
+            "-re",
+            "-f",
+            "s16le",
+            "-ar",
+            "24000",
+            "-ac",
+            "1",
+            "-i",
+            audio_url,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-f",
+            "flv",
+            output_url,
         ]
     elif output_type == "ndi":
         # NDI requires libndi - output_url is the NDI source name
         ndi_name = output_url if output_url else "ZEN-LIVE-TRANSLATED"
         cmd = [
-            "ffmpeg", "-re",
-            "-f", "s16le", "-ar", "24000", "-ac", "1",
-            "-i", audio_url,
-            "-f", "libndi_newtek",
-            "-clock_video", "true",
-            ndi_name
+            "ffmpeg",
+            "-re",
+            "-f",
+            "s16le",
+            "-ar",
+            "24000",
+            "-ac",
+            "1",
+            "-i",
+            audio_url,
+            "-f",
+            "libndi_newtek",
+            "-clock_video",
+            "true",
+            ndi_name,
         ]
     else:
         raise HTTPException(400, f"Unsupported output type: {output_type}")
 
     # Start ffmpeg process
     try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         output_id = f"{output_type}_{session_id}_{secrets.token_hex(4)}"
         streaming_processes[output_id] = {
             "type": f"{output_type}_out",
             "url": output_url,
             "process": process,
-            "session_id": session_id
+            "session_id": session_id,
         }
 
         print(f"📤 Started {output_type} output: {output_url} (PID: {process.pid})")
 
-        return JSONResponse({
-            "status": "started",
-            "output_id": output_id,
-            "output_type": output_type,
-            "output_url": output_url,
-            "pid": process.pid
-        })
+        return JSONResponse(
+            {
+                "status": "started",
+                "output_id": output_id,
+                "output_type": output_type,
+                "output_url": output_url,
+                "pid": process.pid,
+            }
+        )
 
     except Exception as e:
         raise HTTPException(500, f"Failed to start ffmpeg: {str(e)}")
@@ -1694,21 +1840,23 @@ async def start_streaming_input(config: StreamingConfig, _auth: bool = Depends(o
 
     # Build ffmpeg command to ingest and convert to PCM
     cmd = [
-        "ffmpeg", "-re",
-        "-i", url,
-        "-c:a", "pcm_s16le",
-        "-ar", "16000",
-        "-ac", "1",
-        "-f", "s16le",
-        "pipe:1"
+        "ffmpeg",
+        "-re",
+        "-i",
+        url,
+        "-c:a",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        "-f",
+        "s16le",
+        "pipe:1",
     ]
 
     try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         input_id = f"{input_type}_in_{session_id}"
         streaming_processes[input_id] = {
@@ -1716,7 +1864,7 @@ async def start_streaming_input(config: StreamingConfig, _auth: bool = Depends(o
             "url": url,
             "process": process,
             "session_id": session_id,
-            "config": config.model_dump()
+            "config": config.model_dump(),
         }
 
         print(f"📥 Started {input_type} input: {url} (PID: {process.pid})")
@@ -1725,15 +1873,17 @@ async def start_streaming_input(config: StreamingConfig, _auth: bool = Depends(o
         # This requires creating a handler instance and feeding audio chunks
         # For now, this sets up the process - full integration TBD
 
-        return JSONResponse({
-            "status": "started",
-            "input_id": input_id,
-            "input_type": input_type,
-            "session_id": session_id,
-            "input_url": url,
-            "pid": process.pid,
-            "note": "Audio ingestion started. Full translation integration in progress."
-        })
+        return JSONResponse(
+            {
+                "status": "started",
+                "input_id": input_id,
+                "input_type": input_type,
+                "session_id": session_id,
+                "input_url": url,
+                "pid": process.pid,
+                "note": "Audio ingestion started. Full translation integration in progress.",
+            }
+        )
 
     except Exception as e:
         raise HTTPException(500, f"Failed to start ffmpeg: {str(e)}")
@@ -1789,8 +1939,14 @@ SUPPORTED_LANGUAGES = {
 
 # Full voice support per Hanzo docs
 SUPPORTED_VOICES = {
-    "Cherry": {"description": "Sunny, positive, friendly female", "languages": ["zh", "en", "fr", "de", "ru", "it", "es", "pt", "ja", "ko"]},
-    "Nofish": {"description": "Designer voice, casual male", "languages": ["zh", "en", "fr", "de", "ru", "it", "es", "pt", "ja", "ko"]},
+    "Cherry": {
+        "description": "Sunny, positive, friendly female",
+        "languages": ["zh", "en", "fr", "de", "ru", "it", "es", "pt", "ja", "ko"],
+    },
+    "Nofish": {
+        "description": "Designer voice, casual male",
+        "languages": ["zh", "en", "fr", "de", "ru", "it", "es", "pt", "ja", "ko"],
+    },
     "Jada": {"description": "Lively Shanghainese woman", "languages": ["zh"]},
     "Dylan": {"description": "Young Beijing man", "languages": ["zh"]},
     "Sunny": {"description": "Sweet Sichuanese girl", "languages": ["zh"]},
@@ -1842,7 +1998,7 @@ async def websocket_proxy(websocket: WebSocket):
         upstream_ws = await connect(
             TRANSLATE_API_URL,
             additional_headers={"Authorization": f"Bearer {HANZO_API_KEY}"},
-            ssl=ssl_context
+            ssl=ssl_context,
         )
 
         async def forward_to_upstream():
@@ -1865,19 +2021,14 @@ async def websocket_proxy(websocket: WebSocket):
                 print(f"Upstream->Client error: {e}")
 
         # Run both directions concurrently
-        await asyncio.gather(
-            forward_to_upstream(),
-            forward_to_client(),
-            return_exceptions=True
-        )
+        await asyncio.gather(forward_to_upstream(), forward_to_client(), return_exceptions=True)
 
     except Exception as e:
         print(f"WebSocket proxy error: {e}")
         try:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "error": {"message": str(e), "type": "proxy_error"}
-            }))
+            await websocket.send_text(
+                json.dumps({"type": "error", "error": {"message": str(e), "type": "proxy_error"}})
+            )
         except:
             pass
     finally:
@@ -1894,110 +2045,114 @@ async def api_specification():
     """
     ws_url = BASE_URL.replace("https", "wss").replace("http", "ws")
 
-    return JSONResponse({
-        "name": "Zen Live Translation API",
-        "version": "1.0.0",
-        "description": "Real-time audio/video translation powered by Zen Live",
-        "base_url": BASE_URL,
-        "websocket_endpoint": f"{ws_url}/v1/realtime",
-        "protocol": "WebSocket",
-        "authentication": {
-            "http_basic": {
-                "enabled": AUTH_ENABLED,
-                "type": "HTTP Basic Auth" if AUTH_ENABLED else "None",
-                "username": AUTH_USER if AUTH_ENABLED else "Not required",
-                "header_format": "Authorization: Basic <base64(username:password)>",
-                "example": f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}" if AUTH_ENABLED else "No auth required",
-                "curl": f"curl -u '{AUTH_USER}:{AUTH_PASS}' {BASE_URL}/api/status" if AUTH_ENABLED else f"curl {BASE_URL}/api/status",
-                "websocket": f"wscat -c '{ws_url}/v1/realtime' -H 'Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}'" if AUTH_ENABLED else f"wscat -c '{ws_url}/v1/realtime'"
+    return JSONResponse(
+        {
+            "name": "Zen Live Translation API",
+            "version": "1.0.0",
+            "description": "Real-time audio/video translation powered by Zen Live",
+            "base_url": BASE_URL,
+            "websocket_endpoint": f"{ws_url}/v1/realtime",
+            "protocol": "WebSocket",
+            "authentication": {
+                "http_basic": {
+                    "enabled": AUTH_ENABLED,
+                    "type": "HTTP Basic Auth" if AUTH_ENABLED else "None",
+                    "username": AUTH_USER if AUTH_ENABLED else "Not required",
+                    "header_format": "Authorization: Basic <base64(username:password)>",
+                    "example": f"Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}"
+                    if AUTH_ENABLED
+                    else "No auth required",
+                    "curl": f"curl -u '{AUTH_USER}:{AUTH_PASS}' {BASE_URL}/api/status"
+                    if AUTH_ENABLED
+                    else f"curl {BASE_URL}/api/status",
+                    "websocket": f"wscat -c '{ws_url}/v1/realtime' -H 'Authorization: Basic {base64.b64encode(f'{AUTH_USER}:{AUTH_PASS}'.encode()).decode()}'"
+                    if AUTH_ENABLED
+                    else f"wscat -c '{ws_url}/v1/realtime'",
+                },
+                "api_key": {
+                    "type": "Bearer Token (server-side)",
+                    "note": "API key for Hanzo is configured server-side via HANZO_API_KEY env var",
+                    "configured": bool(HANZO_API_KEY),
+                },
             },
-            "api_key": {
-                "type": "Bearer Token (server-side)",
-                "note": "API key for Hanzo is configured server-side via HANZO_API_KEY env var",
-                "configured": bool(HANZO_API_KEY)
-            }
-        },
-        "client_events": {
-            "session.update": {
-                "description": "Update session configuration",
-                "example": {
-                    "event_id": "event_xxx",
-                    "type": "session.update",
-                    "session": {
-                        "modalities": ["text", "audio"],
-                        "voice": "Cherry",
-                        "input_audio_format": "pcm16",
-                        "output_audio_format": "pcm24",
-                        "input_audio_transcription": {"language": "es"},
-                        "translation": {"language": "en"}
-                    }
+            "client_events": {
+                "session.update": {
+                    "description": "Update session configuration",
+                    "example": {
+                        "event_id": "event_xxx",
+                        "type": "session.update",
+                        "session": {
+                            "modalities": ["text", "audio"],
+                            "voice": "Cherry",
+                            "input_audio_format": "pcm16",
+                            "output_audio_format": "pcm24",
+                            "input_audio_transcription": {"language": "es"},
+                            "translation": {"language": "en"},
+                        },
+                    },
+                    "parameters": {
+                        "modalities": "['text'] or ['text', 'audio']",
+                        "voice": "Voice ID (see /api/voices)",
+                        "input_audio_transcription.language": "Source language code",
+                        "translation.language": "Target language code",
+                    },
                 },
-                "parameters": {
-                    "modalities": "['text'] or ['text', 'audio']",
-                    "voice": "Voice ID (see /api/voices)",
-                    "input_audio_transcription.language": "Source language code",
-                    "translation.language": "Target language code"
-                }
+                "input_audio_buffer.append": {
+                    "description": "Send audio data for translation",
+                    "example": {
+                        "event_id": "event_xxx",
+                        "type": "input_audio_buffer.append",
+                        "audio": "<base64_pcm16_audio>",
+                    },
+                    "parameters": {"audio": "Base64-encoded PCM16 audio (16kHz, mono)"},
+                },
+                "input_image_buffer.append": {
+                    "description": "Send image for visual context (improves accuracy)",
+                    "example": {
+                        "event_id": "event_xxx",
+                        "type": "input_image_buffer.append",
+                        "image": "<base64_jpeg_image>",
+                    },
+                    "parameters": {"image": "Base64-encoded JPEG image (max 1080p, 500KB)"},
+                    "notes": [
+                        "Max 2 images per second",
+                        "Must send audio first before images",
+                        "Helps with homonyms and proper nouns",
+                    ],
+                },
             },
-            "input_audio_buffer.append": {
-                "description": "Send audio data for translation",
-                "example": {
-                    "event_id": "event_xxx",
-                    "type": "input_audio_buffer.append",
-                    "audio": "<base64_pcm16_audio>"
-                },
-                "parameters": {
-                    "audio": "Base64-encoded PCM16 audio (16kHz, mono)"
-                }
+            "server_events": {
+                "session.created": "Session initialized with default config",
+                "session.updated": "Session config updated successfully",
+                "response.created": "Model started generating response",
+                "response.audio.delta": "Incremental audio chunk (Base64 PCM24)",
+                "response.audio.done": "Audio generation complete",
+                "response.audio_transcript.delta": "Incremental transcript text",
+                "response.audio_transcript.done": "Complete transcript with final text",
+                "response.text.delta": "Incremental text (text-only mode)",
+                "response.text.done": "Complete text (text-only mode)",
+                "response.done": "Response complete with usage statistics",
+                "error": "Error occurred",
             },
-            "input_image_buffer.append": {
-                "description": "Send image for visual context (improves accuracy)",
-                "example": {
-                    "event_id": "event_xxx",
-                    "type": "input_image_buffer.append",
-                    "image": "<base64_jpeg_image>"
-                },
-                "parameters": {
-                    "image": "Base64-encoded JPEG image (max 1080p, 500KB)"
-                },
-                "notes": [
-                    "Max 2 images per second",
-                    "Must send audio first before images",
-                    "Helps with homonyms and proper nouns"
-                ]
-            }
-        },
-        "server_events": {
-            "session.created": "Session initialized with default config",
-            "session.updated": "Session config updated successfully",
-            "response.created": "Model started generating response",
-            "response.audio.delta": "Incremental audio chunk (Base64 PCM24)",
-            "response.audio.done": "Audio generation complete",
-            "response.audio_transcript.delta": "Incremental transcript text",
-            "response.audio_transcript.done": "Complete transcript with final text",
-            "response.text.delta": "Incremental text (text-only mode)",
-            "response.text.done": "Complete text (text-only mode)",
-            "response.done": "Response complete with usage statistics",
-            "error": "Error occurred"
-        },
-        "audio_format": {
-            "input": {"encoding": "pcm16", "sample_rate": 16000, "channels": 1},
-            "output": {"encoding": "pcm24", "sample_rate": 24000, "channels": 1}
-        },
-        "languages": SUPPORTED_LANGUAGES,
-        "voices": SUPPORTED_VOICES,
-        "billing": {
-            "audio": "12.5 tokens per second (input or output)",
-            "image": "0.5 tokens per 28x28 pixels"
-        },
-        "latency": "~3 seconds for simultaneous interpretation",
-        "links": {
-            "docs": "/docs",
-            "languages": "/api/languages",
-            "voices": "/api/voices",
-            "github": "https://github.com/zenlm/zen-live"
+            "audio_format": {
+                "input": {"encoding": "pcm16", "sample_rate": 16000, "channels": 1},
+                "output": {"encoding": "pcm24", "sample_rate": 24000, "channels": 1},
+            },
+            "languages": SUPPORTED_LANGUAGES,
+            "voices": SUPPORTED_VOICES,
+            "billing": {
+                "audio": "12.5 tokens per second (input or output)",
+                "image": "0.5 tokens per 28x28 pixels",
+            },
+            "latency": "~3 seconds for simultaneous interpretation",
+            "links": {
+                "docs": "/docs",
+                "languages": "/api/languages",
+                "voices": "/api/voices",
+                "github": "https://github.com/zenlm/zen-live",
+            },
         }
-    })
+    )
 
 
 # =============================================================================
@@ -2041,7 +2196,7 @@ async def asr_websocket_proxy(websocket: WebSocket):
         upstream_ws = await connect(
             ASR_API_URL,
             additional_headers={"Authorization": f"Bearer {HANZO_API_KEY}"},
-            ssl=ssl_context
+            ssl=ssl_context,
         )
         print("🎙️ ASR WebSocket proxy connected to Hanzo")
 
@@ -2065,19 +2220,16 @@ async def asr_websocket_proxy(websocket: WebSocket):
                 print(f"ASR Upstream->Client error: {e}")
 
         # Run both directions concurrently
-        await asyncio.gather(
-            forward_to_upstream(),
-            forward_to_client(),
-            return_exceptions=True
-        )
+        await asyncio.gather(forward_to_upstream(), forward_to_client(), return_exceptions=True)
 
     except Exception as e:
         print(f"ASR WebSocket proxy error: {e}")
         try:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "error": {"message": str(e), "type": "asr_proxy_error"}
-            }))
+            await websocket.send_text(
+                json.dumps(
+                    {"type": "error", "error": {"message": str(e), "type": "asr_proxy_error"}}
+                )
+            )
         except:
             pass
     finally:
@@ -2089,38 +2241,44 @@ async def asr_websocket_proxy(websocket: WebSocket):
 @app.get("/api/languages")
 async def list_languages():
     """List all supported languages with audio capability info."""
-    return JSONResponse({
-        "languages": [
-            {
-                "code": code,
-                "name": info["name"],
-                "audio_output": info["audio"],
-                "text_output": True
-            }
-            for code, info in SUPPORTED_LANGUAGES.items()
-        ],
-        "source_languages": list(SUPPORTED_LANGUAGES.keys()),
-        "target_languages_audio": [k for k, v in SUPPORTED_LANGUAGES.items() if v["audio"]],
-        "target_languages_text_only": [k for k, v in SUPPORTED_LANGUAGES.items() if not v["audio"]]
-    })
+    return JSONResponse(
+        {
+            "languages": [
+                {
+                    "code": code,
+                    "name": info["name"],
+                    "audio_output": info["audio"],
+                    "text_output": True,
+                }
+                for code, info in SUPPORTED_LANGUAGES.items()
+            ],
+            "source_languages": list(SUPPORTED_LANGUAGES.keys()),
+            "target_languages_audio": [k for k, v in SUPPORTED_LANGUAGES.items() if v["audio"]],
+            "target_languages_text_only": [
+                k for k, v in SUPPORTED_LANGUAGES.items() if not v["audio"]
+            ],
+        }
+    )
 
 
 @app.get("/api/voices")
 async def list_voices():
     """List all supported TTS voices with language compatibility."""
-    return JSONResponse({
-        "voices": [
-            {
-                "id": voice_id,
-                "description": info["description"],
-                "supported_languages": info["languages"]
-            }
-            for voice_id, info in SUPPORTED_VOICES.items()
-        ],
-        "default": "Nofish",
-        "multilingual": ["Cherry", "Nofish"],
-        "regional": ["Jada", "Dylan", "Sunny", "Peter", "Kiki", "Eric"]
-    })
+    return JSONResponse(
+        {
+            "voices": [
+                {
+                    "id": voice_id,
+                    "description": info["description"],
+                    "supported_languages": info["languages"],
+                }
+                for voice_id, info in SUPPORTED_VOICES.items()
+            ],
+            "default": "Nofish",
+            "multilingual": ["Cherry", "Nofish"],
+            "regional": ["Jada", "Dylan", "Sunny", "Peter", "Kiki", "Eric"],
+        }
+    )
 
 
 def handle_exit(sig, frame):
@@ -2147,9 +2305,9 @@ if __name__ == "__main__":
     ║                   Powered by Hanzo AI                     ║
     ╠═══════════════════════════════════════════════════════════╣
     ║  Control Room:  {local_url:<42} ║
-    ║  Monitor View:  {local_url}/monitor{' '*(36-len(str(PORT)))} ║
-    ║  API Docs:      {local_url}/docs{' '*(39-len(str(PORT)))} ║
-    ║  Broadcast:     {local_url}/broadcast/info{' '*(27-len(str(PORT)))} ║
+    ║  Monitor View:  {local_url}/monitor{" " * (36 - len(str(PORT)))} ║
+    ║  API Docs:      {local_url}/docs{" " * (39 - len(str(PORT)))} ║
+    ║  Broadcast:     {local_url}/broadcast/info{" " * (27 - len(str(PORT)))} ║
     ║                                                           ║
     ║  Production:    {BASE_URL:<42} ║
     ╚═══════════════════════════════════════════════════════════╝

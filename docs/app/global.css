@@ -1,0 +1,9 @@
+@import 'fumadocs-ui/style.css';
+
+:root {
+  --fd-primary: 220 70% 50%;
+}
+
+.dark {
+  --fd-primary: 220 70% 60%;
+}
