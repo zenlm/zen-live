@@ -228,6 +228,12 @@ TARGET_LANGUAGES = [LANG_MAP[code] for code in ["en", "zh", "ru", "fr", "de", "p
 
 
 class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
+    # Pre-computed silent audio frame (1 second of silence at 16kHz, mono, int16)
+    # 16000 samples * 2 bytes = 32000 bytes of zeros
+    SILENT_AUDIO_1S = base64.b64encode(np.zeros(16000, dtype=np.int16).tobytes()).decode()
+    # Shorter keepalive (100ms of silence) - less data, more frequent
+    SILENT_AUDIO_100MS = base64.b64encode(np.zeros(1600, dtype=np.int16).tobytes()).decode()
+
     def __init__(self, session_config: dict = None, session_id: str = None) -> None:
         print("🔧 LiveTranslateHandler.__init__() called")
         super().__init__(
@@ -252,6 +258,11 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
         # Session ID for tracking and audio routing
         self.session_id = session_id
+
+        # Keepalive: track last audio receive time
+        self.last_audio_time = 0.0
+        self.keepalive_task = None
+        self.running = False  # Flag to stop keepalive on shutdown
 
         # Session-specific config (avoids race conditions with concurrent users)
         self.session_config = session_config or {
@@ -282,6 +293,33 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
     def msg_id(cls) -> str:
         cls._msg_counter += 1
         return f"evt_{cls._msg_counter}"
+
+    async def _keepalive_loop(self):
+        """Send silent audio every 2 seconds if no real audio received.
+
+        This keeps the API connection alive indefinitely, avoiding the ~30s
+        timeout that causes "Response timeout" disconnections.
+        """
+        print("🔄 Keepalive loop started")
+        while self.running:
+            try:
+                await asyncio.sleep(2.0)  # Check every 2 seconds
+                if not self.running or self.connection is None:
+                    break
+
+                # If no audio received in last 3 seconds, send silent audio
+                now = time.time()
+                if now - self.last_audio_time > 3.0:
+                    # Send 100ms of silence to keep connection alive
+                    msg = f'{{"event_id":"evt_{self._msg_counter}","type":"input_audio_buffer.append","audio":"{self.SILENT_AUDIO_100MS}"}}'
+                    self._msg_counter += 1
+                    await self.connection.send(msg)
+                    print("🔇 Sent keepalive silence")
+            except Exception as e:
+                if self.running:
+                    print(f"⚠️ Keepalive error: {e}")
+                break
+        print("🔄 Keepalive loop ended")
 
     async def start_up(self):
         try:
@@ -326,6 +364,12 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                 print(f"📤 Sending session.update: {json.dumps(session_update_msg, indent=2)}")
                 await conn.send(json.dumps(session_update_msg))
                 self.connection = conn
+                self.running = True
+                self.last_audio_time = time.time()  # Initialize
+
+                # Start keepalive loop to prevent timeout disconnections
+                self.keepalive_task = asyncio.create_task(self._keepalive_loop())
+
                 print("🎧 Now listening for Hanzo responses...")
 
                 # Each WebSocket response (data) is a JSON event representing translation progress
@@ -483,6 +527,8 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         # Audio receive - send immediately with minimal overhead
         if self.connection is None:
             return
+        # Update last audio time for keepalive tracking
+        self.last_audio_time = time.time()
         sr, array = frame
         audio_b64 = base64.b64encode(array.squeeze().tobytes()).decode()
         # Use string formatting instead of json.dumps for speed
@@ -496,6 +542,16 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
     async def shutdown(self) -> None:
         """Close connection and cleanup resources"""
+        # Stop keepalive loop first
+        self.running = False
+        if self.keepalive_task:
+            self.keepalive_task.cancel()
+            try:
+                await self.keepalive_task
+            except asyncio.CancelledError:
+                pass
+            self.keepalive_task = None
+
         # Cleanup registries
         if self.session_id:
             handler_registry.pop(self.session_id, None)
