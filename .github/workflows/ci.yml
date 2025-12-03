@@ -11,7 +11,8 @@ env:
   HANZO_API_KEY: "test-api-key"
   BASE_URL: "https://test.zen-live.hanzo.ai"
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Force lowercase for ghcr.io compatibility
+  IMAGE_NAME: zenlm/zen-live
 
 jobs:
   build-and-test:
