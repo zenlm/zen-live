@@ -97,6 +97,8 @@ jobs:
 
       - name: Push Docker image
         if: github.event_name != 'pull_request'
+        # Don't fail build if registry push fails (permissions may not be configured)
+        continue-on-error: true
         uses: docker/build-push-action@v5
         with:
           context: .
