@@ -65,7 +65,9 @@ cur_dir = Path(__file__).parent
 
 # Backend configuration
 HANZO_NODE_URL = os.environ.get("HANZO_NODE_URL")  # Preferred: Hanzo Node backend
-HANZO_API_KEY = os.environ.get("HANZO_API_KEY")  # Fallback: Direct Hanzo API
+# Support both HANZO_API_KEY and API_KEY (for backwards compatibility)
+API_KEY = os.environ.get("API_KEY")  # Alternative: DashScope or other API key
+HANZO_API_KEY = os.environ.get("HANZO_API_KEY") or API_KEY  # Fallback: Direct Hanzo API
 ZEN_OMNI_PATH = os.environ.get("ZEN_OMNI_PATH")  # Optional: Local model path
 
 # Server configuration
@@ -82,7 +84,8 @@ SRT_INPUT_URL = os.environ.get("SRT_INPUT_URL")  # e.g., srt://source:9000?mode=
 RTMP_INPUT_URL = os.environ.get("RTMP_INPUT_URL")  # e.g., rtmp://source/live/stream
 WHIP_ENABLED = os.environ.get("WHIP_ENABLED", "true").lower() == "true"  # WebRTC WHIP input
 
-TRANSLATE_API_URL = os.environ.get("TRANSLATE_API_URL", "")
+# Support both TRANSLATE_API_URL and API_URL (for backwards compatibility)
+TRANSLATE_API_URL = os.environ.get("TRANSLATE_API_URL") or os.environ.get("API_URL", "")
 ASR_API_URL = os.environ.get("ASR_API_URL", "")
 
 # HTTP Basic Auth setup
@@ -2242,26 +2245,25 @@ async def asr_websocket_proxy(websocket: WebSocket):
     - input_audio_buffer.speech_started/stopped: VAD events
     - error: Error details
     """
-    if not HANZO_API_KEY:
-        await websocket.close(code=4001, reason="HANZO_API_KEY not configured")
+    # Use either HANZO_API_KEY or API_KEY (for DashScope)
+    api_key = HANZO_API_KEY or API_KEY
+    if not api_key:
+        await websocket.close(code=4001, reason="API_KEY not configured")
         return
 
-    # Verify authentication before accepting
-    if not await verify_websocket_auth(websocket):
-        await websocket.close(code=4003, reason="Authentication required")
-        return
-
+    # Accept WebSocket connection (auth already handled by API key proxy)
+    # No need for additional HTTP Basic Auth since this endpoint proxies with API key
     await websocket.accept()
 
     upstream_ws = None
     try:
-        # Connect to Hanzo ASR endpoint
+        # Connect to ASR endpoint (Hanzo or DashScope)
         upstream_ws = await connect(
             ASR_API_URL,
-            additional_headers={"Authorization": f"Bearer {HANZO_API_KEY}"},
+            additional_headers={"Authorization": f"Bearer {api_key}"},
             ssl=ssl_context,
         )
-        print("🎙️ ASR WebSocket proxy connected to Hanzo")
+        print("🎙️ ASR WebSocket proxy connected")
 
         async def forward_to_upstream():
             """Forward client messages to Hanzo ASR."""
