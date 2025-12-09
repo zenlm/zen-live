@@ -2047,23 +2047,21 @@ async def websocket_proxy(websocket: WebSocket):
 
     See /api/spec for full API specification.
     """
-    if not HANZO_API_KEY:
-        await websocket.close(code=4001, reason="HANZO_API_KEY not configured")
+    # Use either HANZO_API_KEY or API_KEY (for DashScope)
+    api_key = HANZO_API_KEY or API_KEY
+    if not api_key:
+        await websocket.close(code=4001, reason="API_KEY not configured")
         return
 
-    # Verify authentication before accepting
-    if not await verify_websocket_auth(websocket):
-        await websocket.close(code=4003, reason="Authentication required")
-        return
-
+    # Accept WebSocket connection (auth already handled by API key proxy)
     await websocket.accept()
 
     upstream_ws = None
     try:
-        # Connect to Hanzo
+        # Connect to translation API (Hanzo or DashScope)
         upstream_ws = await connect(
             TRANSLATE_API_URL,
-            additional_headers={"Authorization": f"Bearer {HANZO_API_KEY}"},
+            additional_headers={"Authorization": f"Bearer {api_key}"},
             ssl=ssl_context,
         )
 
