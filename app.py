@@ -2045,9 +2045,7 @@ async def websocket_proxy(websocket: WebSocket):
     await websocket.accept()
 
     # WebSocket APIs use Authorization Bearer (both DashScope and Hanzo)
-        auth_headers = {"Authorization": f"Bearer {api_key}"}
-    else:
-        auth_headers = {"Authorization": f"Bearer {api_key}"}
+    auth_headers = {"Authorization": f"Bearer {api_key}"}
 
     upstream_ws = None
     try:
@@ -2247,9 +2245,7 @@ async def asr_websocket_proxy(websocket: WebSocket):
     await websocket.accept()
 
     # WebSocket APIs use Authorization Bearer (both DashScope and Hanzo)
-        auth_headers = {"Authorization": f"Bearer {api_key}"}
-    else:
-        auth_headers = {"Authorization": f"Bearer {api_key}"}
+    auth_headers = {"Authorization": f"Bearer {api_key}"}
 
     upstream_ws = None
     try:
