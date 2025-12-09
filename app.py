@@ -282,8 +282,11 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
             input_sample_rate=16_000,
         )
         self.connection = None
-        self.output_queue = asyncio.Queue(maxsize=100)
-        self.video_queue = asyncio.Queue(maxsize=10)
+        # LOW LATENCY: Reduced queue sizes to minimize buffering delay
+        # 5 audio chunks max (~100-250ms at typical chunk rates)
+        self.output_queue = asyncio.Queue(maxsize=5)
+        # 2 video frames max (~1 second at 2fps)
+        self.video_queue = asyncio.Queue(maxsize=2)
 
         self.last_send_time = 0.0  # Last send timestamp
         self.video_interval = 0.5  # Interval in seconds (match reference: 2fps for context)
@@ -303,6 +306,12 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         self.last_audio_time = 0.0
         self.keepalive_task = None
         self.running = False  # Flag to stop keepalive on shutdown
+        
+        # Latency tracking
+        self.last_input_time = 0.0  # Last time we sent audio to API
+        self.last_output_time = 0.0  # Last time we received audio from API
+        self.latency_samples = []  # Store recent latency measurements
+        self.max_latency_samples = 10  # Keep last 10 measurements
 
         # Per-instance message counter (not shared across sessions)
         self._msg_counter = 0
@@ -407,12 +416,17 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                         "voice": voice_id,
                         "input_audio_format": "pcm16",
                         "output_audio_format": "pcm16",
-                        "input_audio_transcription": {"language": src_language_code},
+                        "input_audio_transcription": {
+                            "language": src_language_code,
+                            "model": "whisper-1"  # Explicit ASR model
+                        },
                         "translation": {
                             "source_language": src_language_code,
-                            "language": target_language_code,
+                            "language": target_language_code
                         },
-                    },
+                        # LOW LATENCY: Enable streaming with minimal buffering
+                        "turn_detection": None,  # Disable VAD for continuous streaming
+                        "max_response_output_tokens": "inf"  # No artificial limits                    },
                 }
                 print(f"📤 Sending session.update: {json.dumps(session_update_msg, indent=2)}")
                 await conn.send(json.dumps(session_update_msg))
@@ -515,10 +529,31 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                     elif event_type == "response.audio.delta":
                         audio_b64 = event.get("delta", "")
                         if audio_b64:
+                            # Measure latency: time from last input to this output
+                            now = time.time()
+                            if self.last_input_time > 0:
+                                latency_ms = (now - self.last_input_time) * 1000
+                                self.latency_samples.append(latency_ms)
+                                if len(self.latency_samples) > self.max_latency_samples:
+                                    self.latency_samples.pop(0)
+                                avg_latency = sum(self.latency_samples) / len(self.latency_samples)
+                                print(f"🕐 Latency: {latency_ms:.0f}ms (avg: {avg_latency:.0f}ms)")
+                            self.last_output_time = now
+                            
                             audio_data = base64.b64decode(audio_b64)
                             audio_array = np.frombuffer(audio_data, dtype=np.int16).reshape(1, -1)
-                            await self.output_queue.put((self.output_sample_rate, audio_array))
-                            # Publish to HTTP audio stream subscribers for broadcast output
+                            
+                            # LOW LATENCY: Drop oldest chunk if queue is full (backpressure)
+                            if self.output_queue.full():
+                                try:
+                                    self.output_queue.get_nowait()
+                                    print("⚠️ Audio queue full, dropped oldest chunk for low latency")
+                                except asyncio.QueueEmpty:
+                                    pass
+                            
+                            await self.output_queue.put(
+                                (self.output_sample_rate, audio_array)
+                            )                            # Publish to HTTP audio stream subscribers for broadcast output
                             # Uses session_id for proper routing to concurrent sessions
                             await publish_audio_to_subscribers(audio_data, self.session_id)
 
@@ -589,8 +624,11 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         conn = self.connection
         if conn is None:
             return
-
-        sr, array = frame
+        # Update last audio time for keepalive tracking and latency measurement
+        now = time.time()
+        self.last_audio_time = now
+        self.last_input_time = now  # Track when we send audio for latency calculation
+                sr, array = frame
         audio_data = array.squeeze()
 
         # Skip silent frames to prevent buffer buildup when source is paused
