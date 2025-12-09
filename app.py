@@ -426,7 +426,8 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                         },
                         # LOW LATENCY: Enable streaming with minimal buffering
                         "turn_detection": None,  # Disable VAD for continuous streaming
-                        "max_response_output_tokens": "inf"  # No artificial limits                    },
+                        "max_response_output_tokens": "inf"  # No artificial limits
+                    },
                 }
                 print(f"📤 Sending session.update: {json.dumps(session_update_msg, indent=2)}")
                 await conn.send(json.dumps(session_update_msg))
@@ -628,7 +629,8 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         now = time.time()
         self.last_audio_time = now
         self.last_input_time = now  # Track when we send audio for latency calculation
-                sr, array = frame
+        
+        sr, array = frame
         audio_data = array.squeeze()
 
         # Skip silent frames to prevent buffer buildup when source is paused
@@ -638,9 +640,6 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
         if rms < 50:
             # Silent frame - don't send, let keepalive handle connection
             return
-
-        # Update last audio time for keepalive tracking (only for real audio)
-        self.last_audio_time = time.time()
 
         self._msg_counter += 1
         audio_b64 = base64.b64encode(audio_data.tobytes()).decode()
