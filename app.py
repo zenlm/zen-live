@@ -2065,12 +2065,18 @@ async def websocket_proxy(websocket: WebSocket):
     # Accept WebSocket connection (auth already handled by API key proxy)
     await websocket.accept()
 
+    # DashScope uses X-DashScope-API-Key header, Hanzo uses Authorization Bearer
+    if HANZO_API_KEY:
+        auth_headers = {"Authorization": f"Bearer {api_key}"}
+    else:
+        auth_headers = {"X-DashScope-API-Key": api_key}
+
     upstream_ws = None
     try:
         # Connect to translation API (Hanzo or DashScope)
         upstream_ws = await connect(
             TRANSLATE_API_URL,
-            additional_headers={"Authorization": f"Bearer {api_key}"},
+            additional_headers=auth_headers,
             ssl=ssl_context,
         )
 
@@ -2262,16 +2268,15 @@ async def asr_websocket_proxy(websocket: WebSocket):
     # No need for additional HTTP Basic Auth since this endpoint proxies with API key
     await websocket.accept()
 
+    # DashScope uses X-DashScope-API-Key header, Hanzo uses Authorization Bearer
+    if HANZO_API_KEY:
+        auth_headers = {"Authorization": f"Bearer {api_key}"}
+    else:
+        auth_headers = {"X-DashScope-API-Key": api_key}
+
     upstream_ws = None
     try:
-        # Connect to ASR endpoint (DashScope uses X-DashScope-API-Key header)
-        auth_headers = {}
-        if "dashscope" in ASR_API_URL.lower():
-            # DashScope authentication
-            auth_headers = {"X-DashScope-API-Key": api_key}
-        else:
-            # Hanzo/other services use Bearer token
-            auth_headers = {"Authorization": f"Bearer {api_key}"}
+        # Connect to ASR endpoint (Hanzo or DashScope)
         
         upstream_ws = await connect(
             ASR_API_URL,
