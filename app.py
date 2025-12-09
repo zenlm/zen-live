@@ -492,6 +492,12 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
 
                         print(f"[STABLE] {self.stable_text}")
                         print(f"[TEMP] {self.temp_text}")
+                        
+                        # Calculate current average latency for UI display
+                        avg_latency = 0
+                        if self.latency_samples:
+                            avg_latency = int(sum(self.latency_samples) / len(self.latency_samples))
+                        
                         await self.output_queue.put(
                             AdditionalOutputs(
                                 {
@@ -501,6 +507,7 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                                     f"<span style='color:gray'>{self.temp_text}</span>",
                                     "update": True,
                                     "new_message": self.awaiting_new_message,
+                                    "latency_ms": avg_latency  # Send latency to UI
                                 }
                             )
                         )
@@ -688,10 +695,28 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                 break
 
 
-def update_chatbot(chatbot: list[dict], response: dict):
+def update_chatbot_and_latency(chatbot: list[dict], latency_md: str, response: dict):
+    """Update both chatbot and latency display from response."""
     is_update = response.pop("update", False)
     new_message_flag = response.pop("new_message", False)
     stable_html = response["content"]
+    latency_ms = response.pop("latency_ms", 0)  # Get latency from response
+
+    # Update latency display
+    if latency_ms > 0:
+        # Color-code based on latency thresholds
+        if latency_ms < 300:
+            color = "green"
+            status = "🟢 Excellent"
+        elif latency_ms < 500:
+            color = "orange"
+            status = "🟡 Good"
+        else:
+            color = "red"
+            status = "🔴 High"
+        latency_md = f"**Latency:** <span style='color:{color}'>{latency_ms}ms</span> {status}"
+    else:
+        latency_md = "**Latency:** --ms"
 
     if is_update:
         if new_message_flag or not chatbot:
@@ -704,7 +729,7 @@ def update_chatbot(chatbot: list[dict], response: dict):
     else:
         chatbot.append(response)
 
-    return chatbot
+    return chatbot, latency_md
 
 
 chatbot = gr.Chatbot(type="messages", allow_tags=False)
@@ -728,6 +753,7 @@ voice = gr.Dropdown(choices=VOICES, value=VOICES[0], type="value", label="Voice"
 # )
 
 latest_message = gr.Textbox(type="text", visible=False)
+latency_display = gr.Markdown(value="**Latency:** --ms", visible=True, label="Translation Latency")
 
 # Optional: Temporarily disable TURN configuration for testing
 rtc_config = get_cloudflare_turn_credentials_async if get_space() else None
@@ -738,9 +764,9 @@ stream = Stream(
     LiveTranslateHandler(),
     mode="send-receive",
     modality="audio-video",
-    additional_inputs=[src_language, language, voice, chatbot],
-    additional_outputs=[chatbot],
-    additional_outputs_handler=update_chatbot,
+    additional_inputs=[src_language, language, voice, chatbot, latency_display],
+    additional_outputs=[chatbot, latency_display],
+    additional_outputs_handler=update_chatbot_and_latency,
     rtc_configuration=rtc_config,
     # High limits - FastRTC treats None as 1, so set explicit high values
     concurrency_limit=1000,
