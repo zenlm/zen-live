@@ -197,7 +197,16 @@ else:
     print("   Set HANZO_NODE_URL (recommended) or HANZO_API_KEY")
     BACKEND_TYPE = None
 
-headers = {"Authorization": f"Bearer {HANZO_API_KEY}"} if HANZO_API_KEY else {}
+# Set authentication headers based on endpoint type
+if HANZO_API_KEY:
+    if TRANSLATE_API_URL and "dashscope" in TRANSLATE_API_URL.lower():
+        # DashScope uses X-DashScope-API-Key header
+        headers = {"X-DashScope-API-Key": HANZO_API_KEY}
+    else:
+        # Hanzo and other services use Bearer token
+        headers = {"Authorization": f"Bearer {HANZO_API_KEY}"}
+else:
+    headers = {}
 LANG_MAP = {
     "en": "English",
     "zh": "Chinese",
@@ -2255,13 +2264,21 @@ async def asr_websocket_proxy(websocket: WebSocket):
 
     upstream_ws = None
     try:
-        # Connect to ASR endpoint (Hanzo or DashScope)
+        # Connect to ASR endpoint (DashScope uses X-DashScope-API-Key header)
+        auth_headers = {}
+        if "dashscope" in ASR_API_URL.lower():
+            # DashScope authentication
+            auth_headers = {"X-DashScope-API-Key": api_key}
+        else:
+            # Hanzo/other services use Bearer token
+            auth_headers = {"Authorization": f"Bearer {api_key}"}
+        
         upstream_ws = await connect(
             ASR_API_URL,
-            additional_headers={"Authorization": f"Bearer {api_key}"},
+            additional_headers=auth_headers,
             ssl=ssl_context,
         )
-        print("🎙️ ASR WebSocket proxy connected")
+        print("🎙️ ASR WebSocket proxy connected to", ASR_API_URL[:50])
 
         async def forward_to_upstream():
             """Forward client messages to Hanzo ASR."""
