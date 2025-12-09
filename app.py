@@ -405,9 +405,13 @@ class LiveTranslateHandler(AsyncAudioVideoStreamHandler):
                     f"⚠️ Source and target language are the same ({target_language_name}), running in echo mode"
                 )
 
+            # Set auth headers for WebSocket connection
+            auth_headers = {"Authorization": f"Bearer {HANZO_API_KEY}"} if HANZO_API_KEY else {}
+            
             print(f"🔌 Connecting to Hanzo WebSocket: {TRANSLATE_API_URL[:50]}...")
+            print(f"🔑 Using API key: {HANZO_API_KEY[:20] if HANZO_API_KEY else 'NONE'}...")
             async with connect(
-                TRANSLATE_API_URL, additional_headers=headers, ssl=ssl_context
+                TRANSLATE_API_URL, additional_headers=auth_headers, ssl=ssl_context
             ) as conn:
                 print("✅ Hanzo WebSocket connected!")
                 self.client = conn
