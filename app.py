@@ -189,23 +189,14 @@ ssl_context = ssl.create_default_context(cafile=certifi.where())
 if HANZO_NODE_URL:
     print(f"🔗 Zen Live: Using Hanzo Node backend at {HANZO_NODE_URL}")
     BACKEND_TYPE = "hanzo_node"
-elif HANZO_API_KEY:
     print("🔗 Zen Live: Using direct Hanzo API")
     BACKEND_TYPE = "hanzo_api"
-else:
     print("⚠️  Zen Live: No backend configured")
     print("   Set HANZO_NODE_URL (recommended) or HANZO_API_KEY")
     BACKEND_TYPE = None
 
-# Set authentication headers based on endpoint type
-if HANZO_API_KEY:
-    if TRANSLATE_API_URL and "dashscope" in TRANSLATE_API_URL.lower():
-        # DashScope uses X-DashScope-API-Key header
-        headers = {"X-DashScope-API-Key": HANZO_API_KEY}
-    else:
-        # Hanzo and other services use Bearer token
-        headers = {"Authorization": f"Bearer {HANZO_API_KEY}"}
-else:
+# Set authentication headers - WebSocket APIs use Authorization Bearer
+    headers = {"Authorization": f"Bearer {HANZO_API_KEY}"}
     headers = {}
 LANG_MAP = {
     "en": "English",
@@ -723,22 +714,17 @@ def update_chatbot_and_latency(chatbot: list[dict], latency_md: str, response: d
         elif latency_ms < 500:
             color = "orange"
             status = "🟡 Good"
-        else:
             color = "red"
             status = "🔴 High"
         latency_md = f"**Latency:** <span style='color:{color}'>{latency_ms}ms</span> {status}"
-    else:
         latency_md = "**Latency:** --ms"
 
     if is_update:
         if new_message_flag or not chatbot:
             chatbot.append({"role": "assistant", "content": stable_html})
-        else:
             if chatbot[-1]["role"] == "assistant":
                 chatbot[-1]["content"] = stable_html
-            else:
                 chatbot.append({"role": "assistant", "content": stable_html})
-    else:
         chatbot.append(response)
 
     return chatbot, latency_md
@@ -876,7 +862,6 @@ wscat -c '{ws_url}/v1/realtime' \\
 curl -H '{auth_header}' \\
      {BASE_URL}/audio/stream/SESSION_ID
 ```"""
-else:
     auth_section = f"""No authentication required - open access
 
 ## API Examples:
@@ -1062,7 +1047,6 @@ async def webrtc_offer(offer: WebRTCOffer):
             sdp = response.get("sdp", "")
             resp_type = response.get("type", "answer")
             webrtc_id = session_id
-        else:
             # Unexpected response type - try to handle it
             print(f"⚠️ Unexpected response type: {type(response)}")
             if hasattr(response, "body"):
@@ -1079,7 +1063,6 @@ async def webrtc_offer(offer: WebRTCOffer):
                 except:
                     sdp = ""
                     resp_type = "answer"
-            else:
                 sdp = getattr(response, "sdp", "")
                 resp_type = getattr(response, "type", "answer")
             webrtc_id = session_id
@@ -1143,7 +1126,6 @@ async def whip_ingest(
 
     if "application/sdp" in content_type:
         sdp = body.decode("utf-8")
-    else:
         # Try to parse as JSON
         try:
             data = json.loads(body)
@@ -1222,7 +1204,6 @@ async def whep_consume(
 
     if "application/sdp" in content_type:
         sdp = body.decode("utf-8")
-    else:
         try:
             data = json.loads(body)
             sdp = data.get("sdp", body.decode("utf-8"))
@@ -1837,7 +1818,6 @@ async def start_streaming_output(
             "true",
             ndi_name,
         ]
-    else:
         raise HTTPException(400, f"Unsupported output type: {output_type}")
 
     # Start ffmpeg process
@@ -1908,7 +1888,6 @@ async def start_streaming_input(config: StreamingConfig, _auth: bool = Depends(o
         input_type = "srt"
     elif url.startswith("rtmp://"):
         input_type = "rtmp"
-    else:
         raise HTTPException(400, "URL must start with srt:// or rtmp://")
 
     session_id = config.session_id or secrets.token_hex(16)
@@ -2065,11 +2044,10 @@ async def websocket_proxy(websocket: WebSocket):
     # Accept WebSocket connection (auth already handled by API key proxy)
     await websocket.accept()
 
-    # DashScope uses X-DashScope-API-Key header, Hanzo uses Authorization Bearer
-    if HANZO_API_KEY:
+    # WebSocket APIs use Authorization Bearer (both DashScope and Hanzo)
         auth_headers = {"Authorization": f"Bearer {api_key}"}
     else:
-        auth_headers = {"X-DashScope-API-Key": api_key}
+        auth_headers = {"Authorization": f"Bearer {api_key}"}
 
     upstream_ws = None
     try:
@@ -2268,11 +2246,10 @@ async def asr_websocket_proxy(websocket: WebSocket):
     # No need for additional HTTP Basic Auth since this endpoint proxies with API key
     await websocket.accept()
 
-    # DashScope uses X-DashScope-API-Key header, Hanzo uses Authorization Bearer
-    if HANZO_API_KEY:
+    # WebSocket APIs use Authorization Bearer (both DashScope and Hanzo)
         auth_headers = {"Authorization": f"Bearer {api_key}"}
     else:
-        auth_headers = {"X-DashScope-API-Key": api_key}
+        auth_headers = {"Authorization": f"Bearer {api_key}"}
 
     upstream_ws = None
     try:
