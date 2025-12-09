@@ -2246,6 +2246,9 @@ async def asr_websocket_proxy(websocket: WebSocket):
 
     # WebSocket APIs use Authorization Bearer (both DashScope and Hanzo)
     auth_headers = {"Authorization": f"Bearer {api_key}"}
+    
+    print(f"🔌 ASR: Connecting to {ASR_API_URL[:60]}...")
+    print(f"🔑 ASR: Using API key: {api_key[:20]}...")
 
     upstream_ws = None
     try:
