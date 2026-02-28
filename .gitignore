@@ -8,3 +8,6 @@ build/
 .DS_Store
 .playwright-mcp
 CLAUDE.md
+AGENTS.md
+GEMINI.md
+QWEN.md
